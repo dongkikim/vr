@@ -1,0 +1,20 @@
+# 빌드 결과물
+/build
+/*/build
+**/build
+*/build
+build/
+.gradle/
+.idea/
+
+# 로컬 환경 설정 (SDK 경로 등)
+local.properties
+
+# Android Studio 내부 설정
+.idea/workspace.xml
+.idea/libraries
+captures/
+
+# OS 생성 파일
+.DS_Store
+Thumbs.db
