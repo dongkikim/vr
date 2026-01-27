@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -178,9 +179,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     init {
         val stockDao = AppDatabase.getDatabase(application).stockDao()
         repository = StockRepository(stockDao)
-        
+
         allStocks = _allStocks.asStateFlow()
-        
+
         dailyHistory = repository.dailyHistory.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -188,10 +189,20 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         viewModelScope.launch {
+            // 앱 기동 시 첫 번째 수집에서만 모든 종목 스냅샷 저장
+            var isFirstCollect = true
             repository.allStocks.collect { list ->
                 _allStocks.value = list
                 updateDailySnapshot() // Update snapshot whenever stocks change
                 updateYesterdayValuations() // Update yesterday's valuations
+
+                // 앱 기동 시 모든 종목의 당일 스냅샷 저장 (같은 날짜는 마지막 값만 유지)
+                if (isFirstCollect && list.isNotEmpty()) {
+                    isFirstCollect = false
+                    list.forEach { stock ->
+                        recordStockHistory(stock)
+                    }
+                }
             }
         }
     }
@@ -229,6 +240,11 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
             investedPrincipal = stock.investedPrincipal
         )
         repository.saveStockHistory(history)
+
+        // Flow가 즉시 트리거되지 않을 수 있으므로, 수동으로 현재 stock의 히스토리 갱신
+        if (_currentStock.value?.id == stock.id) {
+            _stockHistory.value = repository.getStockHistory(stock.id).first()
+        }
     }
 
     /**
@@ -299,7 +315,12 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadStock(id: Long) {
         viewModelScope.launch {
-            _currentStock.value = repository.getStock(id)
+            val stock = repository.getStock(id)
+            _currentStock.value = stock
+
+            // 상세화면 진입 시 당일 스냅샷 저장 (같은 날짜는 마지막 값만 유지)
+            stock?.let { recordStockHistory(it) }
+
             launch {
                 repository.getHistory(id).collect {
                     _transactionHistory.value = it
@@ -378,22 +399,28 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     }
     
     // Manage Pool (Deposit/Withdraw)
-    fun updatePool(stock: Stock, amount: Double, isDeposit: Boolean) {
+    fun updatePool(stock: Stock, amount: Double, isDeposit: Boolean, applyToPrincipal: Boolean = true) {
         viewModelScope.launch {
             var newPool = stock.pool
             var newPrincipal = stock.investedPrincipal
-            
+
             if (isDeposit) {
                 newPool += amount
-                newPrincipal += amount
+                if (applyToPrincipal) newPrincipal += amount
             } else {
                 newPool -= amount
-                newPrincipal -= amount
+                if (applyToPrincipal) newPrincipal -= amount
             }
-            
-            val type = if (isDeposit) "DEPOSIT" else "WITHDRAW"
-            
-            // Record History
+
+            // 원금 적용 여부에 따라 타입 구분
+            val type = when {
+                isDeposit && applyToPrincipal -> "DEPOSIT"
+                isDeposit && !applyToPrincipal -> "DEPOSIT_POOL_ONLY"
+                !isDeposit && applyToPrincipal -> "WITHDRAW"
+                else -> "WITHDRAW_POOL_ONLY"
+            }
+
+            // Record History (이전 상태 저장)
             val history = TransactionHistory(
                 stockId = stock.id,
                 type = type,
@@ -401,10 +428,13 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 quantity = 0,
                 amount = amount,
                 previousV = stock.vValue,
-                newV = stock.vValue
+                newV = stock.vValue,
+                previousPool = stock.pool,
+                previousQuantity = stock.quantity,
+                previousPrincipal = stock.investedPrincipal
             )
             repository.addTransaction(history)
-            
+
             val updatedStock = stock.copy(pool = newPool, investedPrincipal = newPrincipal)
             repository.updateStock(updatedStock)
             _currentStock.value = updatedStock
@@ -417,7 +447,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         val newV = VRCalculator.calculateNewV(stock.vValue, stock.pool, stock.gValue)
 
         viewModelScope.launch {
-            // 1. Record History
+            // 1. Record History (이전 상태 저장)
             val history = TransactionHistory(
                 stockId = stock.id,
                 type = "RECALC_V",
@@ -425,7 +455,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 quantity = 0,
                 amount = 0.0,
                 previousV = stock.vValue,
-                newV = newV
+                newV = newV,
+                previousPool = stock.pool,
+                previousQuantity = stock.quantity,
+                previousPrincipal = stock.investedPrincipal
             )
             repository.addTransaction(history)
 
@@ -455,6 +488,51 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // 통합 정보 수정 (V값, 티커, 통화, 현재가 제외)
+    // MANUAL_EDIT 기록이 추가되면 이후 모든 거래 삭제가 불가능해짐
+    fun updateStockInfo(
+        stock: Stock,
+        name: String,
+        gValue: Double,
+        pool: Double,
+        quantity: Int,
+        investedPrincipal: Double,
+        startDate: Long,
+        defaultRecalcAmount: Double
+    ) {
+        viewModelScope.launch {
+            // MANUAL_EDIT 거래 기록 추가 (이전 상태 저장하지 않음 - 삭제 불가)
+            val editHistory = TransactionHistory(
+                stockId = stock.id,
+                type = "MANUAL_EDIT",
+                price = 0.0,
+                quantity = 0,
+                amount = 0.0,
+                previousV = null,
+                newV = null,
+                previousPool = -1.0,  // 삭제 불가 표시
+                previousQuantity = -1,  // 삭제 불가 표시
+                previousPrincipal = -1.0  // 삭제 불가 표시
+            )
+            repository.addTransaction(editHistory)
+
+            val updatedStock = stock.copy(
+                name = name,
+                gValue = gValue,
+                pool = pool,
+                quantity = quantity,
+                investedPrincipal = investedPrincipal,
+                startDate = startDate,
+                defaultRecalcAmount = defaultRecalcAmount
+            )
+            repository.updateStock(updatedStock)
+            _currentStock.value = updatedStock
+            recordStockHistory(updatedStock)
+            updateDailySnapshot()
+        }
+    }
+
+
     fun recalculateVWithDeposit(stock: Stock, amount: Double, isDeposit: Boolean) {
         viewModelScope.launch {
             // 1. 입출금액 확정
@@ -470,7 +548,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
             val newPool = stock.pool + depositAmount
             val newPrincipal = stock.investedPrincipal + depositAmount
 
-            // 4. 입출금 기록
+            // 4. 입출금 기록 (이전 상태 저장)
             if (amount > 0) {
                 val transactionType = if (isDeposit) "DEPOSIT" else "WITHDRAW"
                 val depositHistory = TransactionHistory(
@@ -480,12 +558,17 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                     quantity = 0,
                     amount = amount,
                     previousV = stock.vValue,
-                    newV = stock.vValue
+                    newV = stock.vValue,
+                    previousPool = stock.pool,
+                    previousQuantity = stock.quantity,
+                    previousPrincipal = stock.investedPrincipal
                 )
                 repository.addTransaction(depositHistory)
             }
 
-            // 5. V값 재산출 기록
+            // 5. V값 재산출 기록 (이전 상태 저장 - 입출금 반영 후 상태)
+            val poolBeforeRecalc = if (amount > 0) newPool else stock.pool
+            val principalBeforeRecalc = if (amount > 0) newPrincipal else stock.investedPrincipal
             val recalcHistory = TransactionHistory(
                 stockId = stock.id,
                 type = "RECALC_V",
@@ -493,7 +576,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 quantity = 0,
                 amount = stock.pool,  // 재산출 시점의 Pool 기록
                 previousV = stock.vValue,
-                newV = newV
+                newV = newV,
+                previousPool = poolBeforeRecalc,
+                previousQuantity = stock.quantity,
+                previousPrincipal = principalBeforeRecalc
             )
             repository.addTransaction(recalcHistory)
 
@@ -549,7 +635,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 newQty -= quantity
             }
 
-            // 1. Record History
+            // 1. Record History (이전 상태 저장)
             val history = TransactionHistory(
                 stockId = stock.id,
                 type = type,
@@ -557,7 +643,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 quantity = quantity,
                 amount = amount,
                 previousV = stock.vValue,
-                newV = stock.vValue
+                newV = stock.vValue,
+                previousPool = stock.pool,
+                previousQuantity = stock.quantity,
+                previousPrincipal = stock.investedPrincipal
             )
             repository.addTransaction(history)
 
@@ -568,5 +657,33 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
             recordStockHistory(updatedStock)
             updateDailySnapshot()
         }
+    }
+
+    // 가장 최근 거래 삭제 및 원복
+    fun deleteLatestTransaction(stock: Stock, transaction: TransactionHistory): Boolean {
+        // 이전 상태 정보가 없으면 삭제 불가
+        if (!transaction.canDelete()) {
+            return false
+        }
+
+        viewModelScope.launch {
+            // 1. 거래 기록 삭제
+            repository.deleteTransaction(transaction.id)
+
+            // 2. 이전 상태로 원복
+            val restoredStock = stock.copy(
+                vValue = transaction.previousV ?: stock.vValue,
+                pool = transaction.previousPool,
+                quantity = transaction.previousQuantity,
+                investedPrincipal = transaction.previousPrincipal
+            )
+            repository.updateStock(restoredStock)
+            _currentStock.value = restoredStock
+
+            // 3. 스냅샷 업데이트
+            recordStockHistory(restoredStock)
+            updateDailySnapshot()
+        }
+        return true
     }
 }

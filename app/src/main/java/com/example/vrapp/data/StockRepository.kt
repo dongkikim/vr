@@ -37,6 +37,10 @@ class StockRepository(private val stockDao: StockDao) {
         stockDao.insertTransaction(transaction)
     }
 
+    suspend fun deleteTransaction(transactionId: Long) {
+        stockDao.deleteTransaction(transactionId)
+    }
+
     suspend fun saveDailyHistory(history: DailyAssetHistory) {
         stockDao.insertDailyHistory(history)
     }
@@ -46,6 +50,8 @@ class StockRepository(private val stockDao: StockDao) {
     }
 
     suspend fun saveStockHistory(history: StockHistory) {
+        // 같은 날짜의 기존 스냅샷 삭제 후 새로 저장
+        stockDao.deleteStockHistoryForSameDay(history.stockId, history.timestamp)
         stockDao.insertStockHistory(history)
     }
 

@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
@@ -47,16 +48,15 @@ fun DetailScreen(
 
     val stock by viewModel.currentStock.collectAsState()
     val stockHistory by viewModel.stockHistory.collectAsState()
-    
+    val transactionHistory by viewModel.transactionHistory.collectAsState()
+
     // Dialog States
     var showPoolDialog by remember { mutableStateOf(false) }
     var showTradeDialog by remember { mutableStateOf(false) }
     var showRecalcDialog by remember { mutableStateOf(false) }
-    var showRenameDialog by remember { mutableStateOf(false) }
-    var showPrincipalDialog by remember { mutableStateOf(false) }
-    var showStartDateDialog by remember { mutableStateOf(false) }
-    var showGValueDialog by remember { mutableStateOf(false) }
-    var showDefaultRecalcDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var transactionToDelete by remember { mutableStateOf<com.example.vrapp.model.TransactionHistory?>(null) }
     var showMenu by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -90,38 +90,10 @@ fun DetailScreen(
                             onDismissRequest = { showMenu = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("종목명 변경") },
+                                text = { Text("정보 수정") },
                                 onClick = {
                                     showMenu = false
-                                    showRenameDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("G값(기울기) 변경") },
-                                onClick = {
-                                    showMenu = false
-                                    showGValueDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("기본 입출금액 설정") },
-                                onClick = {
-                                    showMenu = false
-                                    showDefaultRecalcDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("원금 변경") },
-                                onClick = {
-                                    showMenu = false
-                                    showPrincipalDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("투자 시작일 변경") },
-                                onClick = {
-                                    showMenu = false
-                                    showStartDateDialog = true
+                                    showEditDialog = true
                                 }
                             )
                         }
@@ -282,10 +254,129 @@ fun DetailScreen(
                     }
 
                     StockHistoryChart(
+                        stock = s,
                         historyList = filteredHistory,
                         modifier = Modifier.fillMaxWidth().height(250.dp),
                         onValueSelected = { selectedHistoryItem = it }
                     )
+                }
+
+                // 4. 최근 거래 내역 섹션
+                if (transactionHistory.isNotEmpty()) {
+                    Divider()
+
+                    Text(
+                        "최근 거래 내역",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    val recentTransactions = transactionHistory.take(10)
+
+                    recentTransactions.forEachIndexed { index, transaction ->
+                        val isLatest = index == 0
+                        // 최신 거래가 MANUAL_EDIT이면 삭제 불가, 일반 거래면 삭제 가능
+                        val canDelete = isLatest && transaction.type != "MANUAL_EDIT" && transaction.canDelete()
+                        val dateStr = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
+                            .format(Date(transaction.date))
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isLatest)
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                else
+                                    MaterialTheme.colorScheme.surface
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = when (transaction.type) {
+                                                "BUY" -> "매수"
+                                                "SELL" -> "매도"
+                                                "DEPOSIT" -> "입금"
+                                                "DEPOSIT_POOL_ONLY" -> "입금(Pool)"
+                                                "WITHDRAW" -> "출금"
+                                                "WITHDRAW_POOL_ONLY" -> "출금(Pool)"
+                                                "RECALC_V" -> "V재산출"
+                                                "MANUAL_EDIT" -> "수동편집"
+                                                else -> transaction.type
+                                            },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = when (transaction.type) {
+                                                "BUY" -> Color.Red
+                                                "SELL" -> Color.Blue
+                                                "DEPOSIT", "DEPOSIT_POOL_ONLY" -> Color(0xFF4CAF50)
+                                                "WITHDRAW", "WITHDRAW_POOL_ONLY" -> Color(0xFFFF9800)
+                                                "RECALC_V" -> Color(0xFF9C27B0)
+                                                "MANUAL_EDIT" -> Color(0xFF795548)
+                                                else -> Color.Unspecified
+                                            }
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = dateStr,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color.Gray
+                                        )
+                                    }
+
+                                    if (transaction.type == "BUY" || transaction.type == "SELL") {
+                                        Text(
+                                            "${transaction.quantity}주 × ${formatCurrency(transaction.price, s.currency)}",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+
+                                    if (transaction.amount > 0) {
+                                        Text(
+                                            "금액: ${formatCurrency(transaction.amount, s.currency)}",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+
+                                    if (transaction.type == "RECALC_V" && transaction.previousV != null && transaction.newV != null) {
+                                        Text(
+                                            "V: ${formatCurrency(transaction.previousV, s.currency)} → ${formatCurrency(transaction.newV, s.currency)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color(0xFF9C27B0)
+                                        )
+                                    }
+                                }
+
+                                // 삭제 버튼 (가장 최근 거래만, MANUAL_EDIT 제외)
+                                if (canDelete) {
+                                    IconButton(
+                                        onClick = {
+                                            transactionToDelete = transaction
+                                            showDeleteConfirmDialog = true
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "삭제",
+                                            tint = Color.Red
+                                        )
+                                    }
+                                } else if (isLatest) {
+                                    Text(
+                                        if (transaction.type == "MANUAL_EDIT") "편집기록" else "삭제불가",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.Gray
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } else {
@@ -300,8 +391,8 @@ fun DetailScreen(
         ManagePoolDialog(
             stock = stock!!,
             onDismiss = { showPoolDialog = false },
-            onConfirm = { amount, isDeposit ->
-                viewModel.updatePool(stock!!, amount, isDeposit)
+            onConfirm = { amount, isDeposit, applyToPrincipal ->
+                viewModel.updatePool(stock!!, amount, isDeposit, applyToPrincipal)
                 showPoolDialog = false
             }
         )
@@ -329,57 +420,68 @@ fun DetailScreen(
         )
     }
 
-    if (showRenameDialog && stock != null) {
-        RenameStockDialog(
+    if (showEditDialog && stock != null) {
+        EditStockDialog(
             stock = stock!!,
-            onDismiss = { showRenameDialog = false },
-            onConfirm = { newName ->
-                viewModel.updateStockName(stock!!, newName)
-                showRenameDialog = false
+            onDismiss = { showEditDialog = false },
+            onConfirm = { name, gValue, pool, quantity, principal, startDate, defaultRecalc ->
+                viewModel.updateStockInfo(stock!!, name, gValue, pool, quantity, principal, startDate, defaultRecalc)
+                showEditDialog = false
             }
         )
     }
 
-    if (showGValueDialog && stock != null) {
-        ChangeGValueDialog(
-            stock = stock!!,
-            onDismiss = { showGValueDialog = false },
-            onConfirm = { newG ->
-                viewModel.updateStockGValue(stock!!, newG)
-                showGValueDialog = false
-            }
-        )
-    }
-
-    if (showDefaultRecalcDialog && stock != null) {
-        SetDefaultRecalcDialog(
-            stock = stock!!,
-            onDismiss = { showDefaultRecalcDialog = false },
-            onConfirm = { amount ->
-                viewModel.updateDefaultRecalcAmount(stock!!, amount)
-                showDefaultRecalcDialog = false
-            }
-        )
-    }
-
-    if (showPrincipalDialog && stock != null) {
-        ChangePrincipalDialog(
-            stock = stock!!,
-            onDismiss = { showPrincipalDialog = false },
-            onConfirm = { newPrincipal ->
-                viewModel.updateStockPrincipal(stock!!, newPrincipal)
-                showPrincipalDialog = false
-            }
-        )
-    }
-
-    if (showStartDateDialog && stock != null) {
-        ChangeStartDateDialog(
-            stock = stock!!,
-            onDismiss = { showStartDateDialog = false },
-            onConfirm = { newDate ->
-                viewModel.updateStockStartDate(stock!!, newDate)
-                showStartDateDialog = false
+    // 거래 삭제 확인 다이얼로그
+    if (showDeleteConfirmDialog && transactionToDelete != null && stock != null) {
+        AlertDialog(
+            onDismissRequest = {
+                showDeleteConfirmDialog = false
+                transactionToDelete = null
+            },
+            title = { Text("거래 내역 삭제") },
+            text = {
+                Column {
+                    Text("이 거래를 삭제하고 이전 상태로 되돌리시겠습니까?")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "거래 유형: ${when (transactionToDelete!!.type) {
+                            "BUY" -> "매수"
+                            "SELL" -> "매도"
+                            "DEPOSIT" -> "입금"
+                            "DEPOSIT_POOL_ONLY" -> "입금(Pool)"
+                            "WITHDRAW" -> "출금"
+                            "WITHDRAW_POOL_ONLY" -> "출금(Pool)"
+                            "RECALC_V" -> "V재산출"
+                            "MANUAL_EDIT" -> "수동편집"
+                            else -> transactionToDelete!!.type
+                        }}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                    if (transactionToDelete!!.type == "RECALC_V") {
+                        Text(
+                            "V값이 ${formatCurrency(transactionToDelete!!.previousV ?: 0.0, stock!!.currency)}로 복원됩니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Red
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteLatestTransaction(stock!!, transactionToDelete!!)
+                        showDeleteConfirmDialog = false
+                        transactionToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                ) { Text("삭제") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showDeleteConfirmDialog = false
+                    transactionToDelete = null
+                }) { Text("취소") }
             }
         )
     }
@@ -552,6 +654,7 @@ fun StatusItem(
 
 @Composable
 fun StockHistoryChart(
+    stock: Stock,
     historyList: List<StockHistory>,
     modifier: Modifier = Modifier,
     onValueSelected: (StockHistory?) -> Unit = {}
@@ -562,6 +665,10 @@ fun StockHistoryChart(
         }
         return
     }
+
+    // 현재 stock 기준 상한/하한 (수평선)
+    val currentHighBand = (stock.vValue * (1 + stock.gValue / 100)).toFloat()
+    val currentLowBand = (stock.vValue * (1 - stock.gValue / 100)).toFloat()
 
     AndroidView(
         modifier = modifier,
@@ -580,13 +687,13 @@ fun StockHistoryChart(
                     isGranularityEnabled = true
                     textSize = 10f
                 }
-                
+
                 axisLeft.apply {
                     setDrawGridLines(true)
                     textSize = 10f
                 }
                 axisRight.isEnabled = false
-                
+
                 legend.isEnabled = true
                 legend.textSize = 10f
 
@@ -608,38 +715,38 @@ fun StockHistoryChart(
         update = { chart ->
             val entriesPrincipal = ArrayList<Entry>()
             val entriesTotal = ArrayList<Entry>()
-            val entriesCurrentValuation = ArrayList<Entry>() // New Dataset
+            val entriesCurrentValuation = ArrayList<Entry>()
             val entriesHigh = ArrayList<Entry>()
             val entriesLow = ArrayList<Entry>()
             val dateLabels = ArrayList<String>()
-            
+
             val dateFormat = SimpleDateFormat("MM/dd", Locale.getDefault())
 
             historyList.forEachIndexed { index, item ->
                 val x = index.toFloat()
-                
+
                 val currentTotal = (item.currentPrice * item.quantity) + item.pool
-                val currentValuation = item.currentPrice * item.quantity // Valuation only
-                val highBand = item.vValue * (1 + item.gValue / 100)
-                val lowBand = item.vValue * (1 - item.gValue / 100)
+                val currentValuation = item.currentPrice * item.quantity
 
                 entriesPrincipal.add(Entry(x, item.investedPrincipal.toFloat()))
                 entriesTotal.add(Entry(x, currentTotal.toFloat()))
                 entriesCurrentValuation.add(Entry(x, currentValuation.toFloat()))
-                entriesHigh.add(Entry(x, highBand.toFloat()))
-                entriesLow.add(Entry(x, lowBand.toFloat()))
-                
+                // 상한/하한은 현재 stock 기준 수평선
+                entriesHigh.add(Entry(x, currentHighBand))
+                entriesLow.add(Entry(x, currentLowBand))
+
                 dateLabels.add(dateFormat.format(Date(item.timestamp)))
             }
 
             chart.xAxis.valueFormatter = IndexAxisValueFormatter(dateLabels)
 
-            // 1. 모든 데이터셋을 통틀어 전체 Min/Max 계산 (Y축 범위 설정을 위해)
-            val allYValues = entriesPrincipal.map { it.y } + entriesTotal.map { it.y } + entriesHigh.map { it.y } + entriesLow.map { it.y } + entriesCurrentValuation.map { it.y }
-            val globalMax = allYValues.maxOrNull() ?: 0f
-            val globalMin = allYValues.minOrNull() ?: 0f
+            // Y축 범위: 상한 or 투자원금/총잔고/평가액 중 높은 값 기준
+            val dataYValues = entriesPrincipal.map { it.y } + entriesTotal.map { it.y } + entriesCurrentValuation.map { it.y }
+            val dataMax = dataYValues.maxOrNull() ?: 0f
+            val dataMin = dataYValues.minOrNull() ?: 0f
+            val globalMax = maxOf(dataMax, currentHighBand)
+            val globalMin = minOf(dataMin, currentLowBand)
 
-            // 2. Y축 범위 수동 설정 (여백 10% 추가)
             chart.axisLeft.apply {
                 resetAxisMaximum()
                 resetAxisMinimum()
@@ -654,12 +761,10 @@ fun StockHistoryChart(
             val firstMaxX = entriesTotal.firstOrNull { it.y == totalMax }?.x ?: -1f
             val firstMinX = entriesTotal.firstOrNull { it.y == totalMin }?.x ?: -1f
 
-            // Custom Formatter
             val customFormatter = object : com.github.mikephil.charting.formatter.ValueFormatter() {
                 override fun getPointLabel(entry: Entry?): String {
                     if (entry == null) return ""
-                    // 해당 값이 Max/Min이면서 첫 번째 위치인 경우만 표시
-                    return if ((entry.y == totalMax && entry.x == firstMaxX) || 
+                    return if ((entry.y == totalMax && entry.x == firstMaxX) ||
                                (entry.y == totalMin && entry.x == firstMinX)) {
                         java.text.NumberFormat.getIntegerInstance().format(entry.y.toLong())
                     } else {
@@ -673,7 +778,7 @@ fun StockHistoryChart(
                 setCircleColor(AndroidColor.RED)
                 lineWidth = 2f
                 circleRadius = 2f
-                setDrawCircles(true) // 점 표시
+                setDrawCircles(true)
                 setDrawCircleHole(false)
                 setDrawValues(false)
             }
@@ -683,16 +788,16 @@ fun StockHistoryChart(
                 setCircleColor(AndroidColor.BLUE)
                 lineWidth = 3f
                 circleRadius = 3f
-                setDrawCircles(true) // 점 표시
+                setDrawCircles(true)
                 setDrawCircleHole(false)
                 setDrawValues(true)
-                valueFormatter = customFormatter 
+                valueFormatter = customFormatter
                 valueTextSize = 10f
                 valueTypeface = android.graphics.Typeface.DEFAULT_BOLD
             }
 
-            val setCurrentValuation = LineDataSet(entriesCurrentValuation, "현재평가액").apply {
-                color = AndroidColor.parseColor("#006400") // Dark Green
+            val setCurrentValuation = LineDataSet(entriesCurrentValuation, "평가액").apply {
+                color = AndroidColor.parseColor("#006400")
                 setCircleColor(AndroidColor.parseColor("#006400"))
                 lineWidth = 2f
                 circleRadius = 2f
@@ -706,14 +811,13 @@ fun StockHistoryChart(
                 setCircleColor(AndroidColor.parseColor("#4CAF50"))
                 lineWidth = 1f
                 circleRadius = 1.5f
-                setDrawCircles(false) // 점 표시 제거
+                setDrawCircles(false)
                 setDrawCircleHole(false)
                 setDrawValues(false)
                 enableDashedLine(10f, 5f, 0f)
-                
-                // Fill settings for "Shading between lines" effect (High Band)
+
                 setDrawFilled(true)
-                fillColor = AndroidColor.parseColor("#C8E6C9") // Light Green
+                fillColor = AndroidColor.parseColor("#C8E6C9")
                 fillAlpha = 100
             }
 
@@ -722,15 +826,13 @@ fun StockHistoryChart(
                 setCircleColor(AndroidColor.parseColor("#4CAF50"))
                 lineWidth = 1f
                 circleRadius = 1.5f
-                setDrawCircles(false) // 점 표시 제거
+                setDrawCircles(false)
                 setDrawCircleHole(false)
                 setDrawValues(false)
                 enableDashedLine(10f, 5f, 0f)
-                
-                // Fill settings for "Shading between lines" effect (Low Band Mask)
-                // Fills with White (Background) to mask the High Band's fill below the Low Band
+
                 setDrawFilled(true)
-                fillColor = AndroidColor.WHITE 
+                fillColor = AndroidColor.WHITE
                 fillAlpha = 255
             }
 
@@ -746,10 +848,11 @@ fun StockHistoryChart(
 fun ManagePoolDialog(
     stock: Stock,
     onDismiss: () -> Unit,
-    onConfirm: (Double, Boolean) -> Unit
+    onConfirm: (Double, Boolean, Boolean) -> Unit // amount, isDeposit, applyToPrincipal
 ) {
     var amountStr by remember { mutableStateOf("") }
     var isDeposit by remember { mutableStateOf(true) }
+    var applyToPrincipal by remember { mutableStateOf(true) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -778,8 +881,25 @@ fun ManagePoolDialog(
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = applyToPrincipal,
+                        onCheckedChange = { applyToPrincipal = it }
+                    )
+                    Text(
+                        text = "원금에도 적용",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
                 Text(
-                    text = if (isDeposit) "Pool과 총 원금이 증가합니다." else "Pool과 총 원금이 감소합니다.",
+                    text = if (applyToPrincipal) {
+                        if (isDeposit) "Pool과 원금이 증가합니다." else "Pool과 원금이 감소합니다."
+                    } else {
+                        if (isDeposit) "Pool만 증가합니다. (원금 변동 없음)" else "Pool만 감소합니다. (원금 변동 없음)"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Gray
                 )
@@ -788,7 +908,7 @@ fun ManagePoolDialog(
         confirmButton = {
             Button(onClick = {
                 val amount = amountStr.toDoubleOrNull() ?: 0.0
-                if (amount > 0) onConfirm(amount, isDeposit)
+                if (amount > 0) onConfirm(amount, isDeposit, applyToPrincipal)
             }) { Text("확인") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
@@ -805,6 +925,17 @@ fun TradeDialog(
     var type by remember { mutableStateOf("BUY") }
     var priceStr by remember { mutableStateOf(stock.currentPrice.toString()) }
     var qtyStr by remember { mutableStateOf("") }
+
+    val price = priceStr.toDoubleOrNull() ?: 0.0
+    val qty = qtyStr.toIntOrNull() ?: 0
+    val amount = price * qty
+
+    // 유효성 검사
+    val isPriceValid = price > 0
+    val isQtyValid = qty > 0
+    val isBuyValid = type != "BUY" || amount <= stock.pool
+    val isSellValid = type != "SELL" || qty <= stock.quantity
+    val isValid = isPriceValid && isQtyValid && isBuyValid && isSellValid
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -833,21 +964,45 @@ fun TradeDialog(
                     onValueChange = { priceStr = it },
                     label = { Text("거래 단가") },
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = priceStr.isNotEmpty() && !isPriceValid,
+                    supportingText = if (priceStr.isNotEmpty() && !isPriceValid) {
+                        { Text("0보다 큰 값을 입력하세요") }
+                    } else null
                 )
                 OutlinedTextField(
                     value = qtyStr,
                     onValueChange = { qtyStr = it },
                     label = { Text("수량") },
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = qtyStr.isNotEmpty() && (!isQtyValid || !isSellValid),
+                    supportingText = when {
+                        qtyStr.isNotEmpty() && !isQtyValid -> {{ Text("0보다 큰 값을 입력하세요") }}
+                        qtyStr.isNotEmpty() && !isSellValid -> {{ Text("보유 수량(${stock.quantity}주)을 초과할 수 없습니다") }}
+                        else -> null
+                    }
                 )
-                
-                val amount = (priceStr.toDoubleOrNull() ?: 0.0) * (qtyStr.toIntOrNull() ?: 0)
+
                 Text(
                     text = "총 거래액: " + formatCurrency(amount, stock.currency),
                     fontWeight = FontWeight.Bold
                 )
+
+                // 현재 Pool 표시 및 매수 시 검증 메시지
+                Text(
+                    text = "현재 Pool: " + formatCurrency(stock.pool, stock.currency),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+                if (type == "BUY" && !isBuyValid) {
+                    Text(
+                        text = "Pool이 부족합니다 (필요: ${formatCurrency(amount, stock.currency)})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Red
+                    )
+                }
+
                 Text(
                     text = if(type == "BUY") "Pool이 감소하고 수량이 증가합니다." else "Pool이 증가하고 수량이 감소합니다.",
                     style = MaterialTheme.typography.bodySmall,
@@ -856,11 +1011,10 @@ fun TradeDialog(
             }
         },
         confirmButton = {
-            Button(onClick = {
-                val price = priceStr.toDoubleOrNull() ?: 0.0
-                val qty = qtyStr.toIntOrNull() ?: 0
-                if (price > 0 && qty > 0) onConfirm(type, price, qty)
-            }) { Text("확인") }
+            Button(
+                onClick = { onConfirm(type, price, qty) },
+                enabled = isValid
+            ) { Text("확인") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
     )
@@ -1101,4 +1255,238 @@ fun ChangePrincipalDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditStockDialog(
+    stock: Stock,
+    onDismiss: () -> Unit,
+    onConfirm: (String, Double, Double, Int, Double, Long, Double) -> Unit
+) {
+    var name by remember { mutableStateOf(stock.name) }
+    var gValueStr by remember { mutableStateOf(stock.gValue.toString()) }
+    var poolStr by remember { mutableStateOf(stock.pool.toString()) }
+    var quantityStr by remember { mutableStateOf(stock.quantity.toString()) }
+    var principalStr by remember { mutableStateOf(stock.investedPrincipal.toString()) }
+    var startDate by remember { mutableStateOf(stock.startDate) }
+    var defaultRecalcStr by remember { mutableStateOf(stock.defaultRecalcAmount.toString()) }
+
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showWarningConfirm by remember { mutableStateOf(false) }
+
+    if (showDatePicker) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = if (startDate > 0) startDate else System.currentTimeMillis()
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    startDate = datePickerState.selectedDateMillis ?: startDate
+                    showDatePicker = false
+                }) { Text("확인") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) { Text("취소") }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = MaterialTheme.shapes.large
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "정보 수정",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+
+                // V값 표시 (수정 불가)
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.LightGray.copy(alpha = 0.3f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("V값 (수정불가)", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            formatCurrency(stock.vValue, stock.currency),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Divider()
+
+                // 종목명
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("종목명") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                // G값
+                OutlinedTextField(
+                    value = gValueStr,
+                    onValueChange = { gValueStr = it },
+                    label = { Text("G값 (%)") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                // Pool
+                OutlinedTextField(
+                    value = poolStr,
+                    onValueChange = { poolStr = it },
+                    label = { Text("Pool (예수금)") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                // 보유 수량
+                OutlinedTextField(
+                    value = quantityStr,
+                    onValueChange = { quantityStr = it },
+                    label = { Text("보유 수량") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                // 투자 원금
+                OutlinedTextField(
+                    value = principalStr,
+                    onValueChange = { principalStr = it },
+                    label = { Text("투자 원금") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                // 투자 시작일
+                OutlinedTextField(
+                    value = if (startDate > 0) SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(startDate)) else "",
+                    onValueChange = { },
+                    label = { Text("투자 시작일") },
+                    modifier = Modifier.fillMaxWidth(),
+                    readOnly = true,
+                    trailingIcon = {
+                        IconButton(onClick = { showDatePicker = true }) {
+                            Text("선택", color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                )
+
+                // 기본 입출금액
+                OutlinedTextField(
+                    value = defaultRecalcStr,
+                    onValueChange = { defaultRecalcStr = it },
+                    label = { Text("기본 입출금액 (V값 재산출시)") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 경고 메시지
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "⚠️ 수동 편집 후에는 모든 거래 내역 삭제가 불가능합니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFE65100)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 버튼들
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("취소") }
+
+                    Button(
+                        onClick = { showWarningConfirm = true },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("저장") }
+                }
+            }
+        }
+    }
+
+    // 최종 확인 다이얼로그
+    if (showWarningConfirm) {
+        AlertDialog(
+            onDismissRequest = { showWarningConfirm = false },
+            title = { Text("수동 편집 확인") },
+            text = {
+                Text("수동 편집을 진행하면 이후 모든 거래 내역 삭제가 불가능합니다.\n\n정말 진행하시겠습니까?")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showWarningConfirm = false
+                        val gValue = gValueStr.toDoubleOrNull() ?: stock.gValue
+                        val pool = poolStr.toDoubleOrNull() ?: stock.pool
+                        val quantity = quantityStr.toIntOrNull() ?: stock.quantity
+                        val principal = principalStr.toDoubleOrNull() ?: stock.investedPrincipal
+                        val defaultRecalc = defaultRecalcStr.toDoubleOrNull() ?: stock.defaultRecalcAmount
+
+                        if (name.isNotBlank()) {
+                            onConfirm(name, gValue, pool, quantity, principal, startDate, defaultRecalc)
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                ) { Text("진행") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showWarningConfirm = false }) { Text("취소") }
+            }
+        )
+    }
 }
