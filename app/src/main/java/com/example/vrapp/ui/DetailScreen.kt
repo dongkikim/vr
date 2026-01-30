@@ -920,14 +920,14 @@ fun ManagePoolDialog(
 fun TradeDialog(
     stock: Stock,
     onDismiss: () -> Unit,
-    onConfirm: (String, Double, Int) -> Unit
+    onConfirm: (String, Double, Double) -> Unit
 ) {
     var type by remember { mutableStateOf("BUY") }
     var priceStr by remember { mutableStateOf(stock.currentPrice.toString()) }
     var qtyStr by remember { mutableStateOf("") }
 
     val price = priceStr.toDoubleOrNull() ?: 0.0
-    val qty = qtyStr.toIntOrNull() ?: 0
+    val qty = qtyStr.toDoubleOrNull() ?: 0.0
     val amount = price * qty
 
     // 유효성 검사
@@ -979,7 +979,7 @@ fun TradeDialog(
                     isError = qtyStr.isNotEmpty() && (!isQtyValid || !isSellValid),
                     supportingText = when {
                         qtyStr.isNotEmpty() && !isQtyValid -> {{ Text("0보다 큰 값을 입력하세요") }}
-                        qtyStr.isNotEmpty() && !isSellValid -> {{ Text("보유 수량(${stock.quantity}주)을 초과할 수 없습니다") }}
+                        qtyStr.isNotEmpty() && !isSellValid -> {{ Text("보유 수량(${stock.quantity})을 초과할 수 없습니다") }}
                         else -> null
                     }
                 )
@@ -1262,7 +1262,7 @@ fun ChangePrincipalDialog(
 fun EditStockDialog(
     stock: Stock,
     onDismiss: () -> Unit,
-    onConfirm: (String, Double, Double, Int, Double, Long, Double) -> Unit
+    onConfirm: (String, Double, Double, Double, Double, Long, Double) -> Unit
 ) {
     var name by remember { mutableStateOf(stock.name) }
     var gValueStr by remember { mutableStateOf(stock.gValue.toString()) }
@@ -1473,7 +1473,7 @@ fun EditStockDialog(
                         showWarningConfirm = false
                         val gValue = gValueStr.toDoubleOrNull() ?: stock.gValue
                         val pool = poolStr.toDoubleOrNull() ?: stock.pool
-                        val quantity = quantityStr.toIntOrNull() ?: stock.quantity
+                        val quantity = quantityStr.toDoubleOrNull() ?: stock.quantity
                         val principal = principalStr.toDoubleOrNull() ?: stock.investedPrincipal
                         val defaultRecalc = defaultRecalcStr.toDoubleOrNull() ?: stock.defaultRecalcAmount
 

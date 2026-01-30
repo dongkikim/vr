@@ -176,6 +176,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // 가격 갱신 중 상태
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing = _isRefreshing.asStateFlow()
+
     init {
         val stockDao = AppDatabase.getDatabase(application).stockDao()
         repository = StockRepository(stockDao)
@@ -202,6 +206,8 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                     list.forEach { stock ->
                         recordStockHistory(stock)
                     }
+                    // 앱 기동 시 가격 갱신
+                    refreshAllPrices()
                 }
             }
         }
@@ -249,12 +255,12 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * 실제 네트워크를 통해 주가를 가져옵니다.
-     * (Jsoup for KR, Yahoo API for US)
+     * (Yahoo API 사용)
      */
-    suspend fun fetchRealPrice(ticker: String): Double {
-        android.util.Log.d("StockViewModel", "Fetching price for: $ticker")
+    suspend fun fetchRealPrice(ticker: String, currency: String = "KRW"): Double {
+        android.util.Log.d("StockViewModel", "Fetching price for: $ticker (currency: $currency)")
         return try {
-            val price = StockPriceService.getStockPrice(ticker)
+            val price = StockPriceService.getStockPrice(ticker, currency)
             android.util.Log.d("StockViewModel", "Price fetched: $price")
             price
         } catch (e: Exception) {
@@ -280,20 +286,27 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
      * 등록된 모든 종목의 현재가와 환율을 최신 값으로 업데이트합니다.
      */
     fun refreshAllPrices() {
-        viewModelScope.launch {
-            // 환율 갱신
-            refreshExchangeRates()
+        if (_isRefreshing.value) return // 이미 갱신 중이면 무시
 
-            // 현재 메모리에 로드된 리스트를 순회
-            _allStocks.value.forEach { stock ->
-                val latestPrice = fetchRealPrice(stock.ticker)
-                // 가격이 유효하고 변경되었을 경우에만 업데이트
-                if (latestPrice > 0 && latestPrice != stock.currentPrice) {
-                    repository.updateStock(stock.copy(currentPrice = latestPrice))
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            try {
+                // 환율 갱신
+                refreshExchangeRates()
+
+                // 현재 메모리에 로드된 리스트를 순회
+                _allStocks.value.forEach { stock ->
+                    val latestPrice = fetchRealPrice(stock.ticker, stock.currency)
+                    // 가격이 유효하고 변경되었을 경우에만 업데이트
+                    if (latestPrice > 0 && latestPrice != stock.currentPrice) {
+                        repository.updateStock(stock.copy(currentPrice = latestPrice))
+                    }
                 }
+                updateDailySnapshot() // Snapshot update after price refresh
+                updateYesterdayValuations() // Update yesterday's valuations
+            } finally {
+                _isRefreshing.value = false
             }
-            updateDailySnapshot() // Snapshot update after price refresh
-            updateYesterdayValuations() // Update yesterday's valuations
         }
     }
     
@@ -334,7 +347,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addStock(name: String, ticker: String, v: Double, g: Double, pool: Double, qty: Int, price: Double, currency: String = "KRW", principal: Double? = null, startDate: Long = System.currentTimeMillis()) {
+    fun addStock(name: String, ticker: String, v: Double, g: Double, pool: Double, qty: Double, price: Double, currency: String = "KRW", principal: Double? = null, startDate: Long = System.currentTimeMillis()) {
         viewModelScope.launch {
             // 초기 원금: 입력값이 없으면 (Price * Qty) + Pool로 자동 계산
             val initialPrincipal = principal ?: ((price * qty) + pool)
@@ -425,7 +438,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 stockId = stock.id,
                 type = type,
                 price = 0.0,
-                quantity = 0,
+                quantity = 0.0,
                 amount = amount,
                 previousV = stock.vValue,
                 newV = stock.vValue,
@@ -452,7 +465,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 stockId = stock.id,
                 type = "RECALC_V",
                 price = stock.currentPrice,
-                quantity = 0,
+                quantity = 0.0,
                 amount = 0.0,
                 previousV = stock.vValue,
                 newV = newV,
@@ -495,7 +508,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         name: String,
         gValue: Double,
         pool: Double,
-        quantity: Int,
+        quantity: Double,
         investedPrincipal: Double,
         startDate: Long,
         defaultRecalcAmount: Double
@@ -506,12 +519,12 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 stockId = stock.id,
                 type = "MANUAL_EDIT",
                 price = 0.0,
-                quantity = 0,
+                quantity = 0.0,
                 amount = 0.0,
                 previousV = null,
                 newV = null,
                 previousPool = -1.0,  // 삭제 불가 표시
-                previousQuantity = -1,  // 삭제 불가 표시
+                previousQuantity = -1.0,  // 삭제 불가 표시
                 previousPrincipal = -1.0  // 삭제 불가 표시
             )
             repository.addTransaction(editHistory)
@@ -555,7 +568,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                     stockId = stock.id,
                     type = transactionType,
                     price = 0.0,
-                    quantity = 0,
+                    quantity = 0.0,
                     amount = amount,
                     previousV = stock.vValue,
                     newV = stock.vValue,
@@ -573,7 +586,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 stockId = stock.id,
                 type = "RECALC_V",
                 price = stock.currentPrice,
-                quantity = 0,
+                quantity = 0.0,
                 amount = stock.pool,  // 재산출 시점의 Pool 기록
                 previousV = stock.vValue,
                 newV = newV,
@@ -620,7 +633,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = null
     )
 
-    fun executeTransaction(stock: Stock, type: String, price: Double, quantity: Int) {
+    fun executeTransaction(stock: Stock, type: String, price: Double, quantity: Double) {
         viewModelScope.launch {
             val amount = price * quantity
             var newPool = stock.pool

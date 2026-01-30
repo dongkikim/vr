@@ -90,6 +90,7 @@ fun VRApp(viewModel: StockViewModel) {
                     icon = { Icon(Icons.Default.Home, contentDescription = null) },
                     route = "home",
                     onClick = {
+                        viewModel.refreshAllPrices() // 홈 버튼 클릭 시 가격 갱신
                         navController.navigate("home") {
                             popUpTo(navController.graph.findStartDestination().id) { inclusive = false }
                             launchSingleTop = true

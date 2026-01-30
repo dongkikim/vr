@@ -14,7 +14,7 @@ object VRCalculator {
 
     data class OrderGuide(
         val action: OrderAction,
-        val quantity: Int
+        val quantity: Double
     )
 
     enum class OrderAction {
@@ -67,24 +67,32 @@ object VRCalculator {
         currentPrice: Double,
         bands: VRBands
     ): OrderGuide {
-        if (currentPrice <= 0.0) return OrderGuide(OrderAction.HOLD, 0)
+        if (currentPrice <= 0.0) return OrderGuide(OrderAction.HOLD, 0.0)
 
         if (currentValuation <= bands.lowValuation) {
             val diff = bands.lowValuation - currentValuation
             // Safety check: if difference is tiny, ignore
-            if (diff <= 0) return OrderGuide(OrderAction.HOLD, 0)
+            if (diff <= 0) return OrderGuide(OrderAction.HOLD, 0.0)
 
-            val qty = ceil(diff / currentPrice).toInt()
+            // For stocks, we usually want ceil. For coins, maybe exact? 
+            // Keeping it simple: Just return the raw amount needed to reach band.
+            // But previous logic was ceil/floor for integer stocks.
+            // Let's keep it generally precise for now, UI can round if needed.
+            // Or better: Use ceil for BUY (to ensure we reach band) and floor for SELL (to ensure we reach band? No, to be safe).
+            // Actually, for VR, usually:
+            // Buy: (LowVal - CurrentVal) / Price. Result is float.
+            // Sell: (CurrentVal - HighVal) / Price. Result is float.
+            val qty = diff / currentPrice
             return OrderGuide(OrderAction.BUY, qty)
         } else if (currentValuation >= bands.highValuation) {
             val diff = currentValuation - bands.highValuation
-            if (diff <= 0) return OrderGuide(OrderAction.HOLD, 0)
+            if (diff <= 0) return OrderGuide(OrderAction.HOLD, 0.0)
 
-            val qty = floor(diff / currentPrice).toInt()
+            val qty = diff / currentPrice
             return OrderGuide(OrderAction.SELL, qty)
         }
 
-        return OrderGuide(OrderAction.HOLD, 0)
+        return OrderGuide(OrderAction.HOLD, 0.0)
     }
 
     /**
@@ -93,7 +101,7 @@ object VRCalculator {
      * 수량이 늘어날 때 (매수) = 매수밴드(Low Valuation) / qty
      */
     data class PriceByQuantity(
-        val quantity: Int,
+        val quantity: Double,
         val sellPrice: Double,  // 수량 감소 시 (매도가)
         val buyPrice: Double    // 수량 증가 시 (매수가)
     )
@@ -158,7 +166,7 @@ object VRCalculator {
     }
 
     fun calculatePriceTable(
-        currentQuantity: Int,
+        currentQuantity: Double,
         bands: VRBands,
         range: Int = 5,
         ticker: String = "",
@@ -178,7 +186,7 @@ object VRCalculator {
                 val sellPrice = adjustPrice(rawSellPrice, false, market) // 매도: 내림
                 val buyPrice = adjustPrice(rawBuyPrice, true, market)   // 매수: 올림
 
-                result.add(PriceByQuantity(i, sellPrice, buyPrice))
+                result.add(PriceByQuantity(i.toDouble(), sellPrice, buyPrice))
             }
         }
 

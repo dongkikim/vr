@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
@@ -16,18 +17,16 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import android.widget.Toast
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.example.vrapp.data.StockPriceService
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import com.example.vrapp.model.Stock
 import com.example.vrapp.viewmodel.StockViewModel
 import kotlinx.coroutines.launch
@@ -63,11 +62,10 @@ fun MainScreen(
     val assetStatus by viewModel.assetStatus.collectAsState()
     val yesterdayAssetStatus by viewModel.yesterdayAssetStatus.collectAsState()
     val yesterdayStockValuations by viewModel.yesterdayStockValuations.collectAsState()
-    
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+
     var showAddDialog by remember { mutableStateOf(false) }
     var stockToDelete by remember { mutableStateOf<Stock?>(null) }
-
-    // ... (Lifecycle Effect)
 
     Scaffold(
         floatingActionButton = {
@@ -113,20 +111,38 @@ fun MainScreen(
                             )
                         }
                         
-                        // Icon-only Add Button
-                        Surface(
-                            onClick = { showAddDialog = true },
-                            color = MaterialTheme.colorScheme.primary,
-                            shape = androidx.compose.foundation.shape.CircleShape,
-                            modifier = Modifier.size(16.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Default.Add, 
-                                    contentDescription = "종목 추가",
-                                    modifier = Modifier.size(12.dp),
-                                    tint = MaterialTheme.colorScheme.onPrimary
-                                )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // 새로고침 버튼
+                            Surface(
+                                onClick = { viewModel.refreshAllPrices() },
+                                color = if (isRefreshing) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.secondary,
+                                shape = androidx.compose.foundation.shape.CircleShape,
+                                modifier = Modifier.size(16.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = "새로고침",
+                                        modifier = Modifier.size(12.dp),
+                                        tint = MaterialTheme.colorScheme.onSecondary
+                                    )
+                                }
+                            }
+                            // 종목 추가 버튼
+                            Surface(
+                                onClick = { showAddDialog = true },
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = androidx.compose.foundation.shape.CircleShape,
+                                modifier = Modifier.size(16.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Add,
+                                        contentDescription = "종목 추가",
+                                        modifier = Modifier.size(12.dp),
+                                        tint = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                }
                             }
                         }
                     }
@@ -321,12 +337,14 @@ fun StockCard(stock: Stock, yesterdayValuation: Double? = null, onClick: () -> U
     }
 }
 
+// ... (existing imports)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddStockDialog(
     viewModel: StockViewModel,
     onDismiss: () -> Unit,
-    onConfirm: (String, String, Double, Double, Double, Int, Double, String, Double?, Long) -> Unit
+    onConfirm: (String, String, Double, Double, Double, Double, Double, String, Double?, Long) -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -368,8 +386,6 @@ fun AddStockDialog(
         }
     }
 
-    var marketExpanded by remember { mutableStateOf(false) }
-
     // 종목 조회 함수
     fun searchStock() {
         if (tickerInput.isBlank() || isLoading) return
@@ -402,7 +418,9 @@ fun AddStockDialog(
                 // 증시 선택
                 Text("증시 선택", style = MaterialTheme.typography.labelMedium)
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     StockPriceService.Market.entries.forEach { market ->
@@ -411,12 +429,17 @@ fun AddStockDialog(
                             onClick = {
                                 selectedMarket = market
                                 selectedCurrency = market.currency
+                                // 금인 경우 티커 자동 입력, 그 외에는 초기화
+                                if (market == StockPriceService.Market.GOLD) {
+                                    tickerInput = "GOLD"
+                                } else if (tickerInput == "GOLD") {
+                                    tickerInput = ""
+                                }
                                 // 증시 변경 시 기존 조회 결과 초기화
                                 stockName = ""
                                 priceStr = ""
                             },
                             label = { Text(market.label, style = MaterialTheme.typography.labelSmall) },
-                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -424,14 +447,17 @@ fun AddStockDialog(
                 // 티커 입력 + 조회 버튼
                 OutlinedTextField(
                     value = tickerInput,
-                    onValueChange = { tickerInput = it.trim().uppercase() },
-                    label = { Text("종목 티커") },
+                    onValueChange = { if (selectedMarket != StockPriceService.Market.GOLD) tickerInput = it.trim().uppercase() },
+                    label = { Text(if (selectedMarket == StockPriceService.Market.GOLD) "종목 (고정)" else "종목 티커") },
+                    readOnly = selectedMarket == StockPriceService.Market.GOLD,
                     placeholder = {
                         Text(
                             when (selectedMarket) {
                                 StockPriceService.Market.KOSPI, StockPriceService.Market.KOSDAQ -> "예: 005930"
                                 StockPriceService.Market.US -> "예: AAPL"
                                 StockPriceService.Market.JAPAN -> "예: 7203"
+                                StockPriceService.Market.COIN -> "예: BTC"
+                                StockPriceService.Market.GOLD -> "한국금거래소 시세 적용"
                             }
                         )
                     },
@@ -448,7 +474,7 @@ fun AddStockDialog(
                                     strokeWidth = 2.dp
                                 )
                             } else {
-                                Icon(Icons.Default.Search, contentDescription = "종목 조회")
+                                Icon(Icons.Default.Search, contentDescription = "시세 조회")
                             }
                         }
                     }
@@ -527,7 +553,7 @@ fun AddStockDialog(
             Button(
                 onClick = {
                     val price = priceStr.toDoubleOrNull() ?: 0.0
-                    val qty = qtyStr.toIntOrNull() ?: 0
+                    val qty = qtyStr.toDoubleOrNull() ?: 0.0
                     val pool = poolStr.toDoubleOrNull() ?: 0.0
                     val v = vValueStr.toDoubleOrNull() ?: (price * qty)
                     val principal = principalStr.toDoubleOrNull()

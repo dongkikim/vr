@@ -11,7 +11,7 @@ data class StockHistory(
     val vValue: Double,
     val gValue: Double,
     val currentPrice: Double,
-    val quantity: Int,
+    val quantity: Double,
     val pool: Double,
     val investedPrincipal: Double
 )

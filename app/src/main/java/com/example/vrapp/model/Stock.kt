@@ -15,7 +15,7 @@ data class Stock(
     val vValue: Double, // V: Value
     val gValue: Double, // G: Gradient (%)
     val pool: Double,   // Pool: Cash reserve for this stock
-    val quantity: Int,  // Held quantity
+    val quantity: Double,  // Held quantity
     
     // Asset Tracking
     val investedPrincipal: Double = 0.0, // Total Invested Capital (Won-geum)
@@ -38,19 +38,19 @@ data class TransactionHistory(
     val date: Long = System.currentTimeMillis(),
     val type: String, // "BUY", "SELL", "RECALC_V", "DEPOSIT", "WITHDRAW", etc.
     val price: Double,
-    val quantity: Int,
+    val quantity: Double,
     val amount: Double, // Total value of transaction
     val previousV: Double?,
     val newV: Double?,
     // 원복을 위한 이전 상태 저장 (0이면 마이그레이션 전 데이터로 삭제 불가)
     @ColumnInfo(defaultValue = "-1.0")
     val previousPool: Double = -1.0,
-    @ColumnInfo(defaultValue = "-1")
-    val previousQuantity: Int = -1,
+    @ColumnInfo(defaultValue = "-1.0")
+    val previousQuantity: Double = -1.0,
     @ColumnInfo(defaultValue = "-1.0")
     val previousPrincipal: Double = -1.0
 ) {
     // 이전 상태 정보가 있는지 확인 (삭제 가능 여부)
     // 수량은 절대 음수가 될 수 없으므로 previousQuantity만 체크 (-1이면 마이그레이션 전 데이터)
-    fun canDelete(): Boolean = previousQuantity >= 0
+    fun canDelete(): Boolean = previousQuantity >= 0.0
 }

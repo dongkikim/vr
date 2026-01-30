@@ -115,12 +115,13 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
 
 @Database(
     entities = [Stock::class, TransactionHistory::class, DailyAssetHistory::class, StockHistory::class],
-    version = 8,
+    version = 9,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 4, to = 5),
         AutoMigration(from = 5, to = 6),
-        AutoMigration(from = 7, to = 8) // TransactionHistory에 previousPool, previousQuantity, previousPrincipal 추가
+        AutoMigration(from = 7, to = 8), // TransactionHistory에 previousPool, previousQuantity, previousPrincipal 추가
+        AutoMigration(from = 8, to = 9) // Change quantity to Double
     ]
 )
 abstract class AppDatabase : RoomDatabase() {
