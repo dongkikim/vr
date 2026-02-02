@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.example.vrapp.data.StockPriceService
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.vrapp.logic.VRCalculator
 import com.example.vrapp.model.Stock
 import com.example.vrapp.viewmodel.StockViewModel
 import kotlinx.coroutines.launch
@@ -49,6 +50,18 @@ fun formatCurrency(amount: Double, currency: String): String {
         format.maximumFractionDigits = 2
     }
     return format.format(amount)
+}
+
+fun isCoin(ticker: String): Boolean {
+    return ticker.endsWith(".bithumb")
+}
+
+fun formatQuantity(quantity: Double, ticker: String): String {
+    return if (isCoin(ticker)) {
+        String.format("%.6f", quantity).trimEnd('0').trimEnd('.')
+    } else {
+        String.format("%.0f", quantity)
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -92,6 +105,11 @@ fun MainScreen(
                 } else {
                     0.0
                 }
+                val assetDiffPercent = if (yesterdayAssetStatus != null && yesterdayAssetStatus!!.totalCurrent > 0) {
+                    (assetDiff / yesterdayAssetStatus!!.totalCurrent) * 100
+                } else {
+                    0.0
+                }
                 
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     // Row 1: 전일대비(자산) | 종목추가버튼
@@ -101,10 +119,14 @@ fun MainScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val diffText = if (assetDiff >= 0) "+${formatCurrency(assetDiff, "KRW")}" else formatCurrency(assetDiff, "KRW")
+                        val diffPercentText = if (yesterdayAssetStatus != null && yesterdayAssetStatus!!.totalCurrent > 0) {
+                            String.format("(%+.1f%%)", assetDiffPercent)
+                        } else ""
+
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("전일대비(자산) : ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
                             Text(
-                                diffText,
+                                "$diffText $diffPercentText",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = if (assetDiff >= 0) Color.Red else Color.Blue
@@ -274,6 +296,17 @@ fun StockCard(stock: Stock, yesterdayValuation: Double? = null, onClick: () -> U
         0.0 
     }
 
+    // Calculate VR Order for Background Color
+    val bands = VRCalculator.calculateBands(stock.vValue, stock.gValue)
+    val order = VRCalculator.calculateOrder(currentValuation, stock.currentPrice, bands)
+    
+    val cardColor = when {
+        !stock.isVr -> MaterialTheme.colorScheme.surface // VR 아님: 기본색
+        order.action == VRCalculator.OrderAction.BUY -> Color(0xFFFFEBEE)   // 엷은 붉은색
+        order.action == VRCalculator.OrderAction.SELL -> Color(0xFFE3F2FD)  // 옅은 파란색
+        else -> MaterialTheme.colorScheme.surface
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -282,26 +315,45 @@ fun StockCard(stock: Stock, yesterdayValuation: Double? = null, onClick: () -> U
                 onLongClick = onLongClick
             ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = CardDefaults.cardColors(containerColor = cardColor)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            // 1줄: 종목명(전일대비) | 손익금액 (수익률) - 모든 크기 bodyMedium으로 통일
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = stock.name, 
-                        style = MaterialTheme.typography.bodyMedium, 
-                        fontWeight = FontWeight.Bold
-                    )
-                    if (yesterdayValuation != null) {
+        Box { // Box to place VR tag
+            Column(modifier = Modifier.padding(16.dp)) {
+                // 1줄: 종목명(전일대비) | 손익금액 (수익률) - 모든 크기 bodyMedium으로 통일
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = stock.name, 
+                            style = MaterialTheme.typography.bodyMedium, 
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (stock.isVr) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = MaterialTheme.shapes.extraSmall
+                            ) {
+                                Text(
+                                    text = "VR",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                        if (yesterdayValuation != null) {
                         val diffText = if (diffFromYesterday >= 0) "+${formatCurrency(diffFromYesterday, stock.currency)}" else formatCurrency(diffFromYesterday, stock.currency)
+                        
+                        val diffPercent = if (yesterdayValuation > 0) (diffFromYesterday / yesterdayValuation) * 100 else 0.0
+                        val percentText = if (yesterdayValuation > 0) String.format(", %+.1f%%", diffPercent) else ""
+                        
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "($diffText)",
+                            text = "($diffText$percentText)",
                             style = MaterialTheme.typography.bodyMedium, // 크기 통일
                             fontWeight = FontWeight.Bold,
                             color = if (diffFromYesterday >= 0) Color.Red else Color.Blue
@@ -334,6 +386,7 @@ fun StockCard(stock: Stock, yesterdayValuation: Double? = null, onClick: () -> U
                 Text("Pool : ${formatCurrency(stock.pool, stock.currency)}", style = MaterialTheme.typography.bodyMedium)
             }
         }
+    } // End of Box
     }
 }
 
@@ -500,7 +553,15 @@ fun AddStockDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = qtyStr,
-                        onValueChange = { qtyStr = it },
+                        onValueChange = { input ->
+                            // 코인이 아니면 숫자만, 코인이면 소수점 허용
+                            val filtered = if (selectedMarket != StockPriceService.Market.COIN) {
+                                input.filter { it.isDigit() }
+                            } else {
+                                input.filter { it.isDigit() || it == '.' }
+                            }
+                            qtyStr = filtered
+                        },
                         label = { Text("수량") },
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
                         modifier = Modifier.weight(1f)

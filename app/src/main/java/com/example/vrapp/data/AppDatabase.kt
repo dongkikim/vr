@@ -48,6 +48,9 @@ interface StockDao {
     @Query("SELECT * FROM transactions WHERE stockId = :stockId ORDER BY date DESC, id DESC")
     fun getHistoryForStock(stockId: Long): Flow<List<TransactionHistory>>
 
+    @Query("SELECT * FROM transactions WHERE stockId = :stockId ORDER BY date DESC, id DESC LIMIT :limit")
+    fun getRecentTransactions(stockId: Long, limit: Int): Flow<List<TransactionHistory>>
+
     @Query("DELETE FROM transactions WHERE id = :transactionId")
     suspend fun deleteTransaction(transactionId: Long)
 
@@ -115,13 +118,14 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
 
 @Database(
     entities = [Stock::class, TransactionHistory::class, DailyAssetHistory::class, StockHistory::class],
-    version = 9,
+    version = 10,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 4, to = 5),
         AutoMigration(from = 5, to = 6),
         AutoMigration(from = 7, to = 8), // TransactionHistory에 previousPool, previousQuantity, previousPrincipal 추가
-        AutoMigration(from = 8, to = 9) // Change quantity to Double
+        AutoMigration(from = 8, to = 9), // Change quantity to Double
+        AutoMigration(from = 9, to = 10) // Stock에 isVr 추가
     ]
 )
 abstract class AppDatabase : RoomDatabase() {

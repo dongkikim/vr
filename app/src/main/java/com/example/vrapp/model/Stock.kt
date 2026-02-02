@@ -28,7 +28,10 @@ data class Stock(
     val startDate: Long = System.currentTimeMillis(), // 투자 시작일
 
     @ColumnInfo(defaultValue = "0.0")
-    val defaultRecalcAmount: Double = 0.0 // VR 재계산시 기본 입출금액
+    val defaultRecalcAmount: Double = 0.0, // VR 재계산시 기본 입출금액
+
+    @ColumnInfo(defaultValue = "1")
+    val isVr: Boolean = true // VR 투자 진행 여부 (true: 진행 중, false: 일반 보유)
 )
 
 @Entity(tableName = "transactions")

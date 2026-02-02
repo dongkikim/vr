@@ -332,16 +332,27 @@ fun DetailScreen(
 
                                     if (transaction.type == "BUY" || transaction.type == "SELL") {
                                         Text(
-                                            "${transaction.quantity}주 × ${formatCurrency(transaction.price, s.currency)}",
+                                            "${formatQuantity(transaction.quantity, s.ticker)}주 × ${formatCurrency(transaction.price, s.currency)}",
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                     }
 
                                     if (transaction.amount > 0) {
-                                        Text(
-                                            "금액: ${formatCurrency(transaction.amount, s.currency)}",
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
+                                        Column {
+                                            Text(
+                                                "금액: ${formatCurrency(transaction.amount, s.currency)}",
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                            // 원금 추가 정보 표시
+                                            if (transaction.type == "BUY" && transaction.amount > transaction.previousPool) {
+                                                val addedPrincipal = transaction.amount - transaction.previousPool
+                                                Text(
+                                                    "(원금추가: ${formatCurrency(addedPrincipal, s.currency)})",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color(0xFFE65100)
+                                                )
+                                            }
+                                        }
                                     }
 
                                     if (transaction.type == "RECALC_V" && transaction.previousV != null && transaction.newV != null) {
@@ -402,8 +413,8 @@ fun DetailScreen(
         TradeDialog(
             stock = stock!!,
             onDismiss = { showTradeDialog = false },
-            onConfirm = { type, price, qty ->
-                viewModel.executeTransaction(stock!!, type, price, qty)
+            onConfirm = { type, price, qty, usePrincipal ->
+                viewModel.executeTransaction(stock!!, type, price, qty, usePrincipal)
                 showTradeDialog = false
             }
         )
@@ -424,8 +435,8 @@ fun DetailScreen(
         EditStockDialog(
             stock = stock!!,
             onDismiss = { showEditDialog = false },
-            onConfirm = { name, gValue, pool, quantity, principal, startDate, defaultRecalc ->
-                viewModel.updateStockInfo(stock!!, name, gValue, pool, quantity, principal, startDate, defaultRecalc)
+            onConfirm = { name, gValue, pool, quantity, principal, startDate, defaultRecalc, isVr ->
+                viewModel.updateStockInfo(stock!!, name, gValue, pool, quantity, principal, startDate, defaultRecalc, isVr)
                 showEditDialog = false
             }
         )
@@ -523,9 +534,10 @@ fun TopInfoCard(stock: Stock) {
     val bands = VRCalculator.calculateBands(stock.vValue, stock.gValue)
     val order = VRCalculator.calculateOrder(currentValuation, stock.currentPrice, bands)
     val priceTable = VRCalculator.calculatePriceTable(
-        currentQuantity = stock.quantity, 
+        currentQuantity = stock.quantity,
+        currentPool = stock.pool,
         bands = bands, 
-        range = 10, 
+        range = 30, 
         ticker = stock.ticker, 
         currency = stock.currency
     )
@@ -588,7 +600,7 @@ fun TopInfoCard(stock: Stock) {
                 Text("매도 밴드 (+${stock.gValue.toInt()}%)", modifier = Modifier.weight(1f), color = Color.Red, style = MaterialTheme.typography.bodyMedium)
                 Text(formatCurrency(bands.highValuation, stock.currency), modifier = Modifier.weight(1.5f), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 if (order.action == VRCalculator.OrderAction.SELL) {
-                     Text("매도 ${order.quantity}주", modifier = Modifier.weight(1f), color = Color.Red, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                     Text("매도 ${formatQuantity(order.quantity, stock.ticker)}주", modifier = Modifier.weight(1f), color = Color.Red, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 } else {
                      Text("-", modifier = Modifier.weight(1f), color = Color.Gray, style = MaterialTheme.typography.bodyMedium)
                 }
@@ -600,7 +612,7 @@ fun TopInfoCard(stock: Stock) {
                 Text("매수 밴드 (-${stock.gValue.toInt()}%)", modifier = Modifier.weight(1f), color = Color.Blue, style = MaterialTheme.typography.bodyMedium)
                 Text(formatCurrency(bands.lowValuation, stock.currency), modifier = Modifier.weight(1.5f), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 if (order.action == VRCalculator.OrderAction.BUY) {
-                     Text("매수 ${order.quantity}주", modifier = Modifier.weight(1f), color = Color.Blue, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                     Text("매수 ${formatQuantity(order.quantity, stock.ticker)}주", modifier = Modifier.weight(1f), color = Color.Blue, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 } else {
                      Text("-", modifier = Modifier.weight(1f), color = Color.Gray, style = MaterialTheme.typography.bodyMedium)
                 }
@@ -611,7 +623,7 @@ fun TopInfoCard(stock: Stock) {
             Spacer(modifier = Modifier.height(12.dp))
 
             // Price Table
-            Text("수량별 매매가 (현재 ${stock.quantity}주)", style = MaterialTheme.typography.titleMedium)
+            Text("수량별 매매가 (현재 ${formatQuantity(stock.quantity, stock.ticker)}주)", style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(8.dp))
 
             Row(Modifier.fillMaxWidth().background(Color.LightGray.copy(alpha=0.2f)).padding(8.dp)) {
@@ -626,10 +638,21 @@ fun TopInfoCard(stock: Stock) {
                 val sellQty = stock.quantity - row.quantity
                 val buyQty = stock.quantity + row.quantity
                 Row(Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 8.dp)) {
-                    Text("$sellQty", modifier = Modifier.weight(0.8f), style = MaterialTheme.typography.bodyMedium)
-                    Text(formatCurrency(row.sellPrice, stock.currency), modifier = Modifier.weight(1.2f), color = Color.Red, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                    Text("$buyQty", modifier = Modifier.weight(0.8f), style = MaterialTheme.typography.bodyMedium)
-                    Text(formatCurrency(row.buyPrice, stock.currency), modifier = Modifier.weight(1.2f), color = Color.Blue, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    // 매도 수량 / 가격
+                    Text(formatQuantity(sellQty, stock.ticker), modifier = Modifier.weight(0.8f), style = MaterialTheme.typography.bodyMedium)
+                    if (row.sellPrice > 0) {
+                        Text(formatCurrency(row.sellPrice, stock.currency), modifier = Modifier.weight(1.2f), color = Color.Red, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text("-", modifier = Modifier.weight(1.2f), color = Color.Gray, style = MaterialTheme.typography.bodyMedium)
+                    }
+
+                    // 매수 수량 / 가격
+                    Text(formatQuantity(buyQty, stock.ticker), modifier = Modifier.weight(0.8f), style = MaterialTheme.typography.bodyMedium)
+                    if (row.buyPrice > 0) {
+                        Text(formatCurrency(row.buyPrice, stock.currency), modifier = Modifier.weight(1.2f), color = Color.Blue, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text("-", modifier = Modifier.weight(1.2f), color = Color.Gray, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
                 Divider()
             }
@@ -920,11 +943,12 @@ fun ManagePoolDialog(
 fun TradeDialog(
     stock: Stock,
     onDismiss: () -> Unit,
-    onConfirm: (String, Double, Double) -> Unit
+    onConfirm: (String, Double, Double, Boolean) -> Unit
 ) {
     var type by remember { mutableStateOf("BUY") }
     var priceStr by remember { mutableStateOf(stock.currentPrice.toString()) }
     var qtyStr by remember { mutableStateOf("") }
+    var usePrincipal by remember { mutableStateOf(false) } // 원금 사용 여부
 
     val price = priceStr.toDoubleOrNull() ?: 0.0
     val qty = qtyStr.toDoubleOrNull() ?: 0.0
@@ -933,7 +957,8 @@ fun TradeDialog(
     // 유효성 검사
     val isPriceValid = price > 0
     val isQtyValid = qty > 0
-    val isBuyValid = type != "BUY" || amount <= stock.pool
+    // 매수: 원금사용 체크 시 Pool 한도 무시, 미체크 시 Pool 한도 적용
+    val isBuyValid = type != "BUY" || (usePrincipal || amount <= stock.pool)
     val isSellValid = type != "SELL" || qty <= stock.quantity
     val isValid = isPriceValid && isQtyValid && isBuyValid && isSellValid
 
@@ -959,6 +984,21 @@ fun TradeDialog(
                         colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFE3F2FD), selectedLabelColor = Color.Blue)
                     )
                 }
+                
+                // 원금 체크박스 (매수일 때만 표시)
+                if (type == "BUY") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = usePrincipal,
+                            onCheckedChange = { usePrincipal = it }
+                        )
+                        Text("부족 시 원금에서 충당", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+
                 OutlinedTextField(
                     value = priceStr,
                     onValueChange = { priceStr = it },
@@ -972,14 +1012,21 @@ fun TradeDialog(
                 )
                 OutlinedTextField(
                     value = qtyStr,
-                    onValueChange = { qtyStr = it },
+                    onValueChange = { input ->
+                        val filtered = if (!isCoin(stock.ticker)) {
+                            input.filter { it.isDigit() }
+                        } else {
+                            input.filter { it.isDigit() || it == '.' }
+                        }
+                        qtyStr = filtered
+                    },
                     label = { Text("수량") },
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
                     isError = qtyStr.isNotEmpty() && (!isQtyValid || !isSellValid),
                     supportingText = when {
                         qtyStr.isNotEmpty() && !isQtyValid -> {{ Text("0보다 큰 값을 입력하세요") }}
-                        qtyStr.isNotEmpty() && !isSellValid -> {{ Text("보유 수량(${stock.quantity})을 초과할 수 없습니다") }}
+                        qtyStr.isNotEmpty() && !isSellValid -> {{ Text("보유 수량(${formatQuantity(stock.quantity, stock.ticker)})을 초과할 수 없습니다") }}
                         else -> null
                     }
                 )
@@ -995,24 +1042,42 @@ fun TradeDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Gray
                 )
-                if (type == "BUY" && !isBuyValid) {
-                    Text(
-                        text = "Pool이 부족합니다 (필요: ${formatCurrency(amount, stock.currency)})",
+                
+                if (type == "BUY") {
+                    if (amount > stock.pool) {
+                        if (usePrincipal) {
+                             val shortage = amount - stock.pool
+                             Text(
+                                text = "Pool 소진 후 원금 ${formatCurrency(shortage, stock.currency)} 추가됨",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFE65100) // Orange
+                            )
+                        } else {
+                            Text(
+                                text = "Pool이 부족합니다 (필요: ${formatCurrency(amount, stock.currency)})",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Red
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "Pool이 감소하고 수량이 증가합니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                } else {
+                     Text(
+                        text = "Pool이 증가하고 수량이 감소합니다.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.Red
+                        color = Color.Gray
                     )
                 }
-
-                Text(
-                    text = if(type == "BUY") "Pool이 감소하고 수량이 증가합니다." else "Pool이 증가하고 수량이 감소합니다.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
             }
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(type, price, qty) },
+                onClick = { onConfirm(type, price, qty, usePrincipal) },
                 enabled = isValid
             ) { Text("확인") }
         },
@@ -1262,7 +1327,7 @@ fun ChangePrincipalDialog(
 fun EditStockDialog(
     stock: Stock,
     onDismiss: () -> Unit,
-    onConfirm: (String, Double, Double, Double, Double, Long, Double) -> Unit
+    onConfirm: (String, Double, Double, Double, Double, Long, Double, Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf(stock.name) }
     var gValueStr by remember { mutableStateOf(stock.gValue.toString()) }
@@ -1271,6 +1336,7 @@ fun EditStockDialog(
     var principalStr by remember { mutableStateOf(stock.investedPrincipal.toString()) }
     var startDate by remember { mutableStateOf(stock.startDate) }
     var defaultRecalcStr by remember { mutableStateOf(stock.defaultRecalcAmount.toString()) }
+    var isVr by remember { mutableStateOf(stock.isVr) }
 
     var showDatePicker by remember { mutableStateOf(false) }
     var showWarningConfirm by remember { mutableStateOf(false) }
@@ -1371,7 +1437,14 @@ fun EditStockDialog(
                 // 보유 수량
                 OutlinedTextField(
                     value = quantityStr,
-                    onValueChange = { quantityStr = it },
+                    onValueChange = { input ->
+                        val filtered = if (!isCoin(stock.ticker)) {
+                            input.filter { it.isDigit() }
+                        } else {
+                            input.filter { it.isDigit() || it == '.' }
+                        }
+                        quantityStr = filtered
+                    },
                     label = { Text("보유 수량") },
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
@@ -1417,6 +1490,19 @@ fun EditStockDialog(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
+
+                // VR 관리 여부 스위치
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("VR 투자 관리", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = isVr,
+                        onCheckedChange = { isVr = it }
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -1478,7 +1564,7 @@ fun EditStockDialog(
                         val defaultRecalc = defaultRecalcStr.toDoubleOrNull() ?: stock.defaultRecalcAmount
 
                         if (name.isNotBlank()) {
-                            onConfirm(name, gValue, pool, quantity, principal, startDate, defaultRecalc)
+                            onConfirm(name, gValue, pool, quantity, principal, startDate, defaultRecalc, isVr)
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))

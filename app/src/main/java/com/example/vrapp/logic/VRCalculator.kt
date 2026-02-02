@@ -167,27 +167,47 @@ object VRCalculator {
 
     fun calculatePriceTable(
         currentQuantity: Double,
+        currentPool: Double,
         bands: VRBands,
-        range: Int = 5,
+        range: Int = 30,
         ticker: String = "",
         currency: String = "KRW"
     ): List<PriceByQuantity> {
         val result = mutableListOf<PriceByQuantity>()
         val market = getMarketType(ticker, currency)
+        val limitBuyAmount = currentPool * 0.25
 
         for (i in 1..range) {
             val sellQty = currentQuantity - i  // 매도 후 수량
             val buyQty = currentQuantity + i   // 매수 후 수량
+            
+            var sellPrice = 0.0
+            var buyPrice = 0.0
 
+            // 1. 매도 가격 계산 (보유 수량이 남아야 가능)
             if (sellQty > 0) {
                 val rawSellPrice = bands.highValuation / sellQty
-                val rawBuyPrice = bands.lowValuation / buyQty
-                
-                val sellPrice = adjustPrice(rawSellPrice, false, market) // 매도: 내림
-                val buyPrice = adjustPrice(rawBuyPrice, true, market)   // 매수: 올림
-
-                result.add(PriceByQuantity(i.toDouble(), sellPrice, buyPrice))
+                sellPrice = adjustPrice(rawSellPrice, false, market) // 매도: 내림
             }
+
+            // 2. 매수 가격 계산
+            // VR 공식상 BuyQty는 계속 증가하므로 Price 계산 자체는 항상 가능하지만,
+            // Pool 제한 조건(25%)을 체크해야 함.
+            val rawBuyPrice = bands.lowValuation / buyQty
+            val adjustedBuyPrice = adjustPrice(rawBuyPrice, true, market)   // 매수: 올림
+            
+            // 매수 총액 = 단가 * 수량(i)
+            // 단, adjustedBuyPrice가 0보다 커야 함
+            if (adjustedBuyPrice > 0 && (adjustedBuyPrice * i) <= limitBuyAmount) {
+                buyPrice = adjustedBuyPrice
+            }
+
+            // 둘 다 표시할 수 없으면 (매도 수량 부족 AND 매수 금액 초과) 루프 종료
+            if (sellPrice == 0.0 && buyPrice == 0.0) {
+                break
+            }
+
+            result.add(PriceByQuantity(i.toDouble(), sellPrice, buyPrice))
         }
 
         return result

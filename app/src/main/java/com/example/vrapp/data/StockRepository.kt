@@ -33,6 +33,10 @@ class StockRepository(private val stockDao: StockDao) {
         return stockDao.getHistoryForStock(stockId)
     }
 
+    fun getRecentHistory(stockId: Long, limit: Int): Flow<List<TransactionHistory>> {
+        return stockDao.getRecentTransactions(stockId, limit)
+    }
+
     suspend fun addTransaction(transaction: TransactionHistory) {
         stockDao.insertTransaction(transaction)
     }

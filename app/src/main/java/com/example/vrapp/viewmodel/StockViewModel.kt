@@ -48,6 +48,8 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     // Internal mutable flow backing the public one
     private val _allStocks = MutableStateFlow<List<Stock>>(emptyList())
     
+    private var historyJob: kotlinx.coroutines.Job? = null
+    
     // Autocomplete Mock Data (Expanded)
     private val knownStocks = listOf(
         "삼성전자" to "005930",
@@ -334,11 +336,18 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
             // 상세화면 진입 시 당일 스냅샷 저장 (같은 날짜는 마지막 값만 유지)
             stock?.let { recordStockHistory(it) }
 
-            launch {
-                repository.getHistory(id).collect {
+            // Cancel previous history collection job to avoid duplicates
+            historyJob?.cancel()
+            historyJob = launch {
+                // Fetch only recent 10 transactions
+                repository.getRecentHistory(id, 10).collect {
                     _transactionHistory.value = it
                 }
             }
+            
+            // StockHistory는 차트용이므로 전체 혹은 기간별 조회가 필요하나, 
+            // 여기서는 기존 로직 유지 (Flow 중복 방지 처리는 안되어 있었음 -> 필요하면 추가)
+            // 일단 TransactionHistory 이슈 해결에 집중
             launch {
                 repository.getStockHistory(id).collect {
                     _stockHistory.value = it
@@ -347,7 +356,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addStock(name: String, ticker: String, v: Double, g: Double, pool: Double, qty: Double, price: Double, currency: String = "KRW", principal: Double? = null, startDate: Long = System.currentTimeMillis()) {
+    fun addStock(name: String, ticker: String, v: Double, g: Double, pool: Double, qty: Double, price: Double, currency: String = "KRW", principal: Double? = null, startDate: Long = System.currentTimeMillis(), isVr: Boolean = true) {
         viewModelScope.launch {
             // 초기 원금: 입력값이 없으면 (Price * Qty) + Pool로 자동 계산
             val initialPrincipal = principal ?: ((price * qty) + pool)
@@ -362,7 +371,8 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 currentPrice = price,
                 currency = currency,
                 investedPrincipal = initialPrincipal,
-                startDate = startDate
+                startDate = startDate,
+                isVr = isVr
             )
             repository.addStock(stock)
             updateDailySnapshot()
@@ -511,7 +521,8 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         quantity: Double,
         investedPrincipal: Double,
         startDate: Long,
-        defaultRecalcAmount: Double
+        defaultRecalcAmount: Double,
+        isVr: Boolean
     ) {
         viewModelScope.launch {
             // MANUAL_EDIT 거래 기록 추가 (이전 상태 저장하지 않음 - 삭제 불가)
@@ -536,7 +547,8 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 quantity = quantity,
                 investedPrincipal = investedPrincipal,
                 startDate = startDate,
-                defaultRecalcAmount = defaultRecalcAmount
+                defaultRecalcAmount = defaultRecalcAmount,
+                isVr = isVr
             )
             repository.updateStock(updatedStock)
             _currentStock.value = updatedStock
@@ -633,15 +645,31 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = null
     )
 
-    fun executeTransaction(stock: Stock, type: String, price: Double, quantity: Double) {
+    fun executeTransaction(stock: Stock, type: String, price: Double, quantity: Double, usePrincipal: Boolean = false) {
         viewModelScope.launch {
             val amount = price * quantity
             var newPool = stock.pool
             var newQty = stock.quantity
+            var newPrincipal = stock.investedPrincipal
             
-            // Trading affects Pool and Qty, NOT Principal
+            // Trading affects Pool and Qty
             if (type == "BUY") {
-                newPool -= amount
+                if (amount <= newPool) {
+                    // Pool 충분: Pool에서 차감
+                    newPool -= amount
+                } else {
+                    // Pool 부족
+                    if (usePrincipal) {
+                        // 부족분을 원금에서 충당 (Pool은 0이 되고, 나머지는 원금 증가)
+                        val shortage = amount - newPool
+                        newPool = 0.0
+                        newPrincipal += shortage
+                    } else {
+                        // (UI에서 막겠지만) Pool 부족 시 처리 불가 -> 원래는 에러지만 여기선 Pool만큼만 차감? 아니면 실행 불가.
+                        // 로직상 여기 도달하면 안됨 (UI 검증). 안전장치로 리턴.
+                        return@launch
+                    }
+                }
                 newQty += quantity
             } else if (type == "SELL") {
                 newPool += amount
@@ -664,7 +692,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
             repository.addTransaction(history)
 
             // 2. Update Stock
-            val updatedStock = stock.copy(pool = newPool, quantity = newQty)
+            val updatedStock = stock.copy(pool = newPool, quantity = newQty, investedPrincipal = newPrincipal)
             repository.updateStock(updatedStock)
             _currentStock.value = updatedStock
             recordStockHistory(updatedStock)
