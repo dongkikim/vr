@@ -537,7 +537,7 @@ fun TopInfoCard(stock: Stock) {
         currentQuantity = stock.quantity,
         currentPool = stock.pool,
         bands = bands, 
-        range = 30, 
+        range = 10, 
         ticker = stock.ticker, 
         currency = stock.currency
     )
@@ -639,7 +639,12 @@ fun TopInfoCard(stock: Stock) {
                 val buyQty = stock.quantity + row.quantity
                 Row(Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 8.dp)) {
                     // 매도 수량 / 가격
-                    Text(formatQuantity(sellQty, stock.ticker), modifier = Modifier.weight(0.8f), style = MaterialTheme.typography.bodyMedium)
+                    if (sellQty > 0) {
+                        Text(formatQuantity(sellQty, stock.ticker), modifier = Modifier.weight(0.8f), style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        Text("-", modifier = Modifier.weight(0.8f), style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+                    }
+                    
                     if (row.sellPrice > 0) {
                         Text(formatCurrency(row.sellPrice, stock.currency), modifier = Modifier.weight(1.2f), color = Color.Red, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                     } else {
@@ -649,7 +654,8 @@ fun TopInfoCard(stock: Stock) {
                     // 매수 수량 / 가격
                     Text(formatQuantity(buyQty, stock.ticker), modifier = Modifier.weight(0.8f), style = MaterialTheme.typography.bodyMedium)
                     if (row.buyPrice > 0) {
-                        Text(formatCurrency(row.buyPrice, stock.currency), modifier = Modifier.weight(1.2f), color = Color.Blue, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        val priceColor = if (row.isOverLimit) Color(0xFFFF9800) else Color.Blue // 25% 초과시 주황색
+                        Text(formatCurrency(row.buyPrice, stock.currency), modifier = Modifier.weight(1.2f), color = priceColor, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                     } else {
                         Text("-", modifier = Modifier.weight(1.2f), color = Color.Gray, style = MaterialTheme.typography.bodyMedium)
                     }

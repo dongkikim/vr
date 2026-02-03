@@ -16,6 +16,8 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
@@ -71,14 +73,20 @@ fun MainScreen(
     onStockClick: (Long) -> Unit,
     onChartClick: () -> Unit
 ) {
-    val stocks by viewModel.allStocks.collectAsState()
+    // 기존 allStocks 대신 필터/정렬된 리스트 구독
+    val stocks by viewModel.displayStocks.collectAsState()
     val assetStatus by viewModel.assetStatus.collectAsState()
     val yesterdayAssetStatus by viewModel.yesterdayAssetStatus.collectAsState()
     val yesterdayStockValuations by viewModel.yesterdayStockValuations.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    
+    // 필터/정렬 상태 구독
+    val currentFilter by viewModel.filterOption.collectAsState()
+    val currentSort by viewModel.sortOption.collectAsState()
 
     var showAddDialog by remember { mutableStateOf(false) }
     var stockToDelete by remember { mutableStateOf<Stock?>(null) }
+    var showSortMenu by remember { mutableStateOf(false) } // 정렬 메뉴 표시 여부
 
     Scaffold(
         floatingActionButton = {
@@ -99,6 +107,7 @@ fun MainScreen(
                     .background(MaterialTheme.colorScheme.primaryContainer)
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
+                // ... (Existing Header Content Code) ...
                 val totalProfitLoss = assetStatus.totalCurrent - assetStatus.totalPrincipal
                 val assetDiff = if (yesterdayAssetStatus != null) {
                     assetStatus.totalCurrent - yesterdayAssetStatus!!.totalCurrent
@@ -216,7 +225,62 @@ fun MainScreen(
                 }
             }
 
-            // 2. 중단 Content
+            // 2. 필터 및 정렬 바 (신규 추가)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // 필터 칩 리스트
+                androidx.compose.foundation.lazy.LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    items(StockViewModel.StockFilter.entries) { filter ->
+                        FilterChip(
+                            selected = currentFilter == filter,
+                            onClick = { viewModel.setFilter(filter) },
+                            label = { Text(filter.label) },
+                            leadingIcon = if (currentFilter == filter) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            } else null
+                        )
+                    }
+                }
+
+                // 정렬 버튼
+                Box {
+                    TextButton(onClick = { showSortMenu = true }) {
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "정렬")
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(currentSort.label, style = MaterialTheme.typography.bodySmall)
+                    }
+                    DropdownMenu(
+                        expanded = showSortMenu,
+                        onDismissRequest = { showSortMenu = false }
+                    ) {
+                        StockViewModel.StockSort.entries.forEach { sortOption ->
+                            DropdownMenuItem(
+                                text = { Text(sortOption.label) },
+                                onClick = {
+                                    viewModel.setSort(sortOption)
+                                    showSortMenu = false
+                                },
+                                trailingIcon = if (currentSort == sortOption) {
+                                    { Icon(Icons.Default.Check, contentDescription = null) }
+                                } else null
+                            )
+                        }
+                    }
+                }
+            }
+            
+            Divider()
+
+            // 3. 중단 Content
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -225,7 +289,7 @@ fun MainScreen(
             ) {
                 if (stocks.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("등록된 종목이 없습니다.\n아래 + 버튼을 눌러 추가하세요.", color = Color.Gray)
+                        Text("표시할 종목이 없습니다.", color = Color.Gray)
                     }
                 } else {
                     LazyColumn(
@@ -319,7 +383,7 @@ fun StockCard(stock: Stock, yesterdayValuation: Double? = null, onClick: () -> U
     ) {
         Box { // Box to place VR tag
             Column(modifier = Modifier.padding(16.dp)) {
-                // 1줄: 종목명(전일대비) | 손익금액 (수익률) - 모든 크기 bodyMedium으로 통일
+                // 1줄: 종목명|VR태그 --------- 현재가
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -345,47 +409,78 @@ fun StockCard(stock: Stock, yesterdayValuation: Double? = null, onClick: () -> U
                                 )
                             }
                         }
-                        if (yesterdayValuation != null) {
+                    }
+                    Text(
+                        text = formatCurrency(stock.currentPrice, stock.currency),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                // 2줄: 전일대비변동(금액,%) --------- 총손익금액(금액,%)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Left: 전일대비변동
+                    if (yesterdayValuation != null) {
                         val diffText = if (diffFromYesterday >= 0) "+${formatCurrency(diffFromYesterday, stock.currency)}" else formatCurrency(diffFromYesterday, stock.currency)
-                        
                         val diffPercent = if (yesterdayValuation > 0) (diffFromYesterday / yesterdayValuation) * 100 else 0.0
-                        val percentText = if (yesterdayValuation > 0) String.format(", %+.1f%%", diffPercent) else ""
-                        
-                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "($diffText$percentText)",
-                            style = MaterialTheme.typography.bodyMedium, // 크기 통일
-                            fontWeight = FontWeight.Bold,
+                            text = "$diffText (${String.format("%+.1f", diffPercent)}%)",
+                            style = MaterialTheme.typography.bodySmall,
                             color = if (diffFromYesterday >= 0) Color.Red else Color.Blue
                         )
+                    } else {
+                        Text("-", style = MaterialTheme.typography.bodySmall)
                     }
+                    
+                    // Right: 총손익금액
+                    Text(
+                        text = "${formatCurrency(profitLoss, stock.currency)} (${String.format("%+.1f", roi)}%)",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (profitLoss >= 0) Color.Red else Color.Blue
+                    )
                 }
-                Text(
-                    text = "${formatCurrency(profitLoss, stock.currency)} (${String.format("%+.1f", roi)}%)",
-                    style = MaterialTheme.typography.bodyMedium, // 크기 통일
-                    fontWeight = FontWeight.Bold,
-                    color = if (profitLoss >= 0) Color.Red else Color.Blue
-                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // 3줄: 투자원금 --------- 총자산
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "투자원금 : ${formatCurrency(stock.investedPrincipal, stock.currency)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "총자산 : ${formatCurrency(currentTotal, stock.currency)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                // 4줄: 현재평가액 --------- Pool
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "현재평가액 : ${formatCurrency(currentValuation, stock.currency)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "Pool : ${formatCurrency(stock.pool, stock.currency)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            // 2줄: 현재가 | 투자원금
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("현재가 : ${formatCurrency(stock.currentPrice, stock.currency)}", style = MaterialTheme.typography.bodyMedium)
-                Text("투자원금 : ${formatCurrency(stock.investedPrincipal, stock.currency)}", style = MaterialTheme.typography.bodyMedium)
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            // 3줄: 총자산 | Pool
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("총자산 : ${formatCurrency(currentTotal, stock.currency)}", style = MaterialTheme.typography.bodyMedium)
-                Text("Pool : ${formatCurrency(stock.pool, stock.currency)}", style = MaterialTheme.typography.bodyMedium)
-            }
-        }
     } // End of Box
     }
 }

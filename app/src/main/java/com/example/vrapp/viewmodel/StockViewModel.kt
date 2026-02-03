@@ -45,8 +45,96 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     private val _stockHistory = MutableStateFlow<List<StockHistory>>(emptyList())
     val stockHistory = _stockHistory.asStateFlow()
 
+    // 실시간 환율 (KRW 기준)
+    private val _exchangeRates = MutableStateFlow(
+        mapOf(
+            "KRW" to 1.0,
+            "USD" to 1400.0,  // 기본값 (실시간 조회 전)
+            "JPY" to 9.0      // 기본값 (실시간 조회 전)
+        )
+    )
+
+    // Yesterday's Valuation per Stock (Map<StockId, Valuation>)
+    private val _yesterdayStockValuations = MutableStateFlow<Map<Long, Double>>(emptyMap())
+    val yesterdayStockValuations = _yesterdayStockValuations.asStateFlow()
+
     // Internal mutable flow backing the public one
     private val _allStocks = MutableStateFlow<List<Stock>>(emptyList())
+
+    // --- 필터 및 정렬 기능 ---
+    enum class StockFilter(val label: String) {
+        ALL("전체"),
+        VR("VR 종목"),
+        NON_VR("일반 종목")
+    }
+
+    enum class StockSort(val label: String) {
+        PRINCIPAL("투자원금순"),
+        TOTAL_ASSET("총자산순"),
+        CURRENT_VALUATION("현재평가액순"),
+        POOL("Pool순"),
+        DAY_CHANGE_AMT("전일대비(금액)"),
+        DAY_CHANGE_PCT("전일대비(%)"),
+        PROFIT_AMT("총손익(금액)"),
+        PROFIT_PCT("총손익(%)")
+    }
+
+    private val _filterOption = MutableStateFlow(StockFilter.ALL)
+    val filterOption = _filterOption.asStateFlow()
+
+    private val _sortOption = MutableStateFlow(StockSort.TOTAL_ASSET) // 기본값: 총자산순
+    val sortOption = _sortOption.asStateFlow()
+
+    fun setFilter(option: StockFilter) { _filterOption.value = option }
+    fun setSort(option: StockSort) { _sortOption.value = option }
+
+    // 필터와 정렬이 적용된 최종 리스트
+    val displayStocks: StateFlow<List<Stock>> = combine(
+        _allStocks,
+        _filterOption,
+        _sortOption,
+        _exchangeRates,
+        _yesterdayStockValuations
+    ) { stocks, filter, sort, rates, yesterdayVals ->
+        // 1. 필터링
+        val filtered = when (filter) {
+            StockFilter.ALL -> stocks
+            StockFilter.VR -> stocks.filter { it.isVr }
+            StockFilter.NON_VR -> stocks.filter { !it.isVr }
+        }
+
+        // 2. 정렬 (환율 적용)
+        filtered.sortedByDescending { stock ->
+            val rate = rates[stock.currency] ?: 1.0
+            
+            // 공통 계산 값
+            val currentValuation = stock.currentPrice * stock.quantity
+            val totalAsset = currentValuation + stock.pool
+            val principal = stock.investedPrincipal
+            val profit = totalAsset - principal
+            
+            // 전일 데이터
+            val yesterdayVal = yesterdayVals[stock.id]
+            val diffAmount = if (yesterdayVal != null) totalAsset - yesterdayVal else 0.0
+            val diffPct = if (yesterdayVal != null && yesterdayVal > 0) diffAmount / yesterdayVal else -9999.0 // 신규는 하위로
+
+            // 정렬 기준 값을 KRW로 환산하여 반환
+            when (sort) {
+                StockSort.PRINCIPAL -> principal * rate
+                StockSort.TOTAL_ASSET -> totalAsset * rate
+                StockSort.CURRENT_VALUATION -> currentValuation * rate
+                StockSort.POOL -> stock.pool * rate
+                StockSort.DAY_CHANGE_AMT -> diffAmount * rate
+                StockSort.DAY_CHANGE_PCT -> diffPct // 퍼센트는 환율 무관
+                StockSort.PROFIT_AMT -> profit * rate
+                StockSort.PROFIT_PCT -> if (principal > 0) profit / principal else -9999.0
+            }
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
     
     private var historyJob: kotlinx.coroutines.Job? = null
     
@@ -74,19 +162,6 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         val totalCurrent: Double = 0.0,
         val totalROI: Double = 0.0
     )
-
-    // 실시간 환율 (KRW 기준)
-    private val _exchangeRates = MutableStateFlow(
-        mapOf(
-            "KRW" to 1.0,
-            "USD" to 1400.0,  // 기본값 (실시간 조회 전)
-            "JPY" to 9.0      // 기본값 (실시간 조회 전)
-        )
-    )
-
-    // Yesterday's Valuation per Stock (Map<StockId, Valuation>)
-    private val _yesterdayStockValuations = MutableStateFlow<Map<Long, Double>>(emptyMap())
-    val yesterdayStockValuations = _yesterdayStockValuations.asStateFlow()
 
     // ... (Existing helper methods)
 
