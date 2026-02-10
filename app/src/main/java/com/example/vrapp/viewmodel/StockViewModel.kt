@@ -442,6 +442,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 vValue = v,
                 gValue = g,
                 pool = pool,
+                vrPool = pool, // 초기 vrPool은 초기 pool과 동일하게 설정
                 quantity = qty,
                 currentPrice = price,
                 currency = currency,
@@ -529,7 +530,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 newV = stock.vValue,
                 previousPool = stock.pool,
                 previousQuantity = stock.quantity,
-                previousPrincipal = stock.investedPrincipal
+                previousPrincipal = stock.investedPrincipal,
+                previousVrPool = stock.vrPool,
+                previousNetTradeAmount = stock.netTradeAmount
             )
             repository.addTransaction(history)
 
@@ -556,12 +559,14 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 newV = newV,
                 previousPool = stock.pool,
                 previousQuantity = stock.quantity,
-                previousPrincipal = stock.investedPrincipal
+                previousPrincipal = stock.investedPrincipal,
+                previousVrPool = stock.vrPool,
+                previousNetTradeAmount = stock.netTradeAmount
             )
             repository.addTransaction(history)
 
-            // 2. Update Stock (Pool은 0으로 초기화)
-            val updatedStock = stock.copy(vValue = newV, pool = 0.0)
+            // 2. Update Stock (Pool은 0으로 초기화, vrPool도 0으로 업데이트, netTradeAmount는 0으로 리셋)
+            val updatedStock = stock.copy(vValue = newV, pool = 0.0, vrPool = 0.0, netTradeAmount = 0.0)
             repository.updateStock(updatedStock)
             _currentStock.value = updatedStock
             recordStockHistory(updatedStock)
@@ -611,7 +616,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 newV = null,
                 previousPool = -1.0,  // 삭제 불가 표시
                 previousQuantity = -1.0,  // 삭제 불가 표시
-                previousPrincipal = -1.0  // 삭제 불가 표시
+                previousPrincipal = -1.0,  // 삭제 불가 표시
+                previousVrPool = -1.0,
+                previousNetTradeAmount = 0.0
             )
             repository.addTransaction(editHistory)
 
@@ -661,7 +668,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                     newV = stock.vValue,
                     previousPool = stock.pool,
                     previousQuantity = stock.quantity,
-                    previousPrincipal = stock.investedPrincipal
+                    previousPrincipal = stock.investedPrincipal,
+                    previousVrPool = stock.vrPool,
+                    previousNetTradeAmount = stock.netTradeAmount
                 )
                 repository.addTransaction(depositHistory)
             }
@@ -679,15 +688,19 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 newV = newV,
                 previousPool = poolBeforeRecalc,
                 previousQuantity = stock.quantity,
-                previousPrincipal = principalBeforeRecalc
+                previousPrincipal = principalBeforeRecalc,
+                previousVrPool = stock.vrPool,
+                previousNetTradeAmount = stock.netTradeAmount
             )
             repository.addTransaction(recalcHistory)
 
-            // 6. Stock 업데이트
+            // 6. Stock 업데이트 (vrPool을 새 Pool 값으로 동기화, netTradeAmount는 0으로 리셋)
             val updatedStock = stock.copy(
                 vValue = newV,
                 pool = newPool,
-                investedPrincipal = newPrincipal
+                investedPrincipal = newPrincipal,
+                vrPool = newPool,
+                netTradeAmount = 0.0
             )
             repository.updateStock(updatedStock)
             _currentStock.value = updatedStock
@@ -726,8 +739,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
             var newPool = stock.pool
             var newQty = stock.quantity
             var newPrincipal = stock.investedPrincipal
+            var newNetTradeAmount = stock.netTradeAmount
             
-            // Trading affects Pool and Qty
+            // Trading affects Pool, Qty, and netTradeAmount
             if (type == "BUY") {
                 if (amount <= newPool) {
                     // Pool 충분: Pool에서 차감
@@ -746,9 +760,11 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 newQty += quantity
+                newNetTradeAmount += amount // 매수 시 누적 집행 금액 증가
             } else if (type == "SELL") {
                 newPool += amount
                 newQty -= quantity
+                newNetTradeAmount -= amount // 매도 시 누적 집행 금액 감소
             }
 
             // 1. Record History (이전 상태 저장)
@@ -762,12 +778,19 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 newV = stock.vValue,
                 previousPool = stock.pool,
                 previousQuantity = stock.quantity,
-                previousPrincipal = stock.investedPrincipal
+                previousPrincipal = stock.investedPrincipal,
+                previousVrPool = stock.vrPool,
+                previousNetTradeAmount = stock.netTradeAmount
             )
             repository.addTransaction(history)
 
             // 2. Update Stock
-            val updatedStock = stock.copy(pool = newPool, quantity = newQty, investedPrincipal = newPrincipal)
+            val updatedStock = stock.copy(
+                pool = newPool, 
+                quantity = newQty, 
+                investedPrincipal = newPrincipal,
+                netTradeAmount = newNetTradeAmount
+            )
             repository.updateStock(updatedStock)
             _currentStock.value = updatedStock
             recordStockHistory(updatedStock)
@@ -791,7 +814,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 vValue = transaction.previousV ?: stock.vValue,
                 pool = transaction.previousPool,
                 quantity = transaction.previousQuantity,
-                investedPrincipal = transaction.previousPrincipal
+                investedPrincipal = transaction.previousPrincipal,
+                vrPool = transaction.previousVrPool,
+                netTradeAmount = transaction.previousNetTradeAmount
             )
             repository.updateStock(restoredStock)
             _currentStock.value = restoredStock

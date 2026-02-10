@@ -172,12 +172,21 @@ object VRCalculator {
         bands: VRBands,
         range: Int = 30,
         ticker: String = "",
-        currency: String = "KRW"
+        currency: String = "KRW",
+        vrPool: Double = -1.0,
+        netTradeAmount: Double = 0.0
     ): List<PriceByQuantity> {
         val result = mutableListOf<PriceByQuantity>()
         val market = getMarketType(ticker, currency)
-        val safeBuyLimit = currentPool * 0.25 // 안전 매수 한도 (25%)
-        val totalBuyLimit = currentPool       // 최대 매수 한도 (100%)
+        
+        // VR 시점의 Pool이 지정되어 있지 않으면 현재 Pool을 사용 (마이그레이션 대응)
+        val referencePoolForLimit = if (vrPool >= 0) vrPool else currentPool
+        
+        val safeBuyLimit = referencePoolForLimit * 0.25 // 안전 매수 한도 (VR 시점 Pool의 25%)
+        val totalBuyLimit = currentPool       // 최대 매수 한도 (현재 가용 Pool의 100%)
+
+        // 이미 매수한 금액: VR 시점 이후의 순수 매매 집행 금액 (매수 - 매도)
+        val alreadySpent = netTradeAmount
 
         for (i in 1..range) {
             val sellQty = currentQuantity - i  // 매도 후 수량
@@ -204,11 +213,13 @@ object VRCalculator {
             val adjustedBuyPrice = adjustPrice(rawBuyPrice, true, market)   // 매수: 올림
             
             // 매수 총액 = 단가 * 수량(i)
+            val purchaseAmount = adjustedBuyPrice * i
+
             // 단, adjustedBuyPrice가 0보다 크고, 전체 Pool(100%) 이내여야 함
-            if (adjustedBuyPrice > 0 && (adjustedBuyPrice * i) <= totalBuyLimit) {
+            if (adjustedBuyPrice > 0 && purchaseAmount <= totalBuyLimit) {
                 buyPrice = adjustedBuyPrice
-                // 25% 초과 여부 체크
-                if ((adjustedBuyPrice * i) > safeBuyLimit) {
+                // 25% 초과 여부 체크 (이미 매수한 금액 + 이번 매수 금액 > 안전 한도)
+                if ((alreadySpent + purchaseAmount) > safeBuyLimit) {
                     isOver = true
                 }
             }

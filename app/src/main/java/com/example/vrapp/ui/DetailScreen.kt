@@ -539,7 +539,9 @@ fun TopInfoCard(stock: Stock) {
         bands = bands, 
         range = 10, 
         ticker = stock.ticker, 
-        currency = stock.currency
+        currency = stock.currency,
+        vrPool = stock.vrPool,
+        netTradeAmount = stock.netTradeAmount
     )
 
     val annualizedRoi = remember(stock.startDate, totalRoi) {

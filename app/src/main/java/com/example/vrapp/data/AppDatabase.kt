@@ -116,9 +116,29 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+// vrPool 초기화 마이그레이션 (기존 데이터를 현재 pool 값으로 채움)
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        // 1. 컬럼 추가
+        database.execSQL("ALTER TABLE stocks ADD COLUMN vrPool REAL NOT NULL DEFAULT -1.0")
+        database.execSQL("ALTER TABLE transactions ADD COLUMN previousVrPool REAL NOT NULL DEFAULT -1.0")
+        
+        // 2. 기존 데이터 업데이트 (vrPool이 -1.0인 경우 현재 pool로 업데이트)
+        database.execSQL("UPDATE stocks SET vrPool = pool WHERE vrPool = -1.0")
+    }
+}
+
+// netTradeAmount 추가 마이그레이션
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE stocks ADD COLUMN netTradeAmount REAL NOT NULL DEFAULT 0.0")
+        database.execSQL("ALTER TABLE transactions ADD COLUMN previousNetTradeAmount REAL NOT NULL DEFAULT 0.0")
+    }
+}
+
 @Database(
     entities = [Stock::class, TransactionHistory::class, DailyAssetHistory::class, StockHistory::class],
-    version = 10,
+    version = 12,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 4, to = 5),
@@ -142,7 +162,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "vr_investment_db"
                 )
-                .addMigrations(MIGRATION_6_7)
+                .addMigrations(MIGRATION_6_7, MIGRATION_10_11, MIGRATION_11_12)
                 .build()
                 INSTANCE = instance
                 instance

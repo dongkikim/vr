@@ -31,7 +31,13 @@ data class Stock(
     val defaultRecalcAmount: Double = 0.0, // VR 재계산시 기본 입출금액
 
     @ColumnInfo(defaultValue = "1")
-    val isVr: Boolean = true // VR 투자 진행 여부 (true: 진행 중, false: 일반 보유)
+    val isVr: Boolean = true, // VR 투자 진행 여부 (true: 진행 중, false: 일반 보유)
+
+    @ColumnInfo(defaultValue = "-1.0")
+    val vrPool: Double = -1.0, // VR 시점의 Pool (매수 한도 계산용)
+
+    @ColumnInfo(defaultValue = "0.0")
+    val netTradeAmount: Double = 0.0 // VR 시점 이후의 순수 매매 집행 금액 (매수 - 매도)
 )
 
 @Entity(tableName = "transactions")
@@ -51,7 +57,11 @@ data class TransactionHistory(
     @ColumnInfo(defaultValue = "-1.0")
     val previousQuantity: Double = -1.0,
     @ColumnInfo(defaultValue = "-1.0")
-    val previousPrincipal: Double = -1.0
+    val previousPrincipal: Double = -1.0,
+    @ColumnInfo(defaultValue = "-1.0")
+    val previousVrPool: Double = -1.0,
+    @ColumnInfo(defaultValue = "0.0")
+    val previousNetTradeAmount: Double = 0.0
 ) {
     // 이전 상태 정보가 있는지 확인 (삭제 가능 여부)
     // 수량은 절대 음수가 될 수 없으므로 previousQuantity만 체크 (-1이면 마이그레이션 전 데이터)
