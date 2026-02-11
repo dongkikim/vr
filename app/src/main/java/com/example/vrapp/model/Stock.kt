@@ -36,6 +36,9 @@ data class Stock(
     @ColumnInfo(defaultValue = "-1.0")
     val vrPool: Double = -1.0, // VR 시점의 Pool (매수 한도 계산용)
 
+    @ColumnInfo(defaultValue = "-1.0")
+    val vrQuantity: Double = -1.0, // VR 시점의 수량 (매수 한도 계산용)
+
     @ColumnInfo(defaultValue = "0.0")
     val netTradeAmount: Double = 0.0 // VR 시점 이후의 순수 매매 집행 금액 (매수 - 매도)
 )
@@ -60,6 +63,8 @@ data class TransactionHistory(
     val previousPrincipal: Double = -1.0,
     @ColumnInfo(defaultValue = "-1.0")
     val previousVrPool: Double = -1.0,
+    @ColumnInfo(defaultValue = "-1.0")
+    val previousVrQuantity: Double = -1.0,
     @ColumnInfo(defaultValue = "0.0")
     val previousNetTradeAmount: Double = 0.0
 ) {

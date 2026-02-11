@@ -174,19 +174,33 @@ object VRCalculator {
         ticker: String = "",
         currency: String = "KRW",
         vrPool: Double = -1.0,
-        netTradeAmount: Double = 0.0
+        netTradeAmount: Double = 0.0,
+        vrQuantity: Double = -1.0
     ): List<PriceByQuantity> {
         val result = mutableListOf<PriceByQuantity>()
         val market = getMarketType(ticker, currency)
         
-        // VR 시점의 Pool이 지정되어 있지 않으면 현재 Pool을 사용 (마이그레이션 대응)
-        val referencePoolForLimit = if (vrPool >= 0) vrPool else currentPool
+        // 1. 기준 시점 데이터 확정
+        val referencePoolForLimit = if (vrPool >= 0) vrPool else (currentPool + netTradeAmount)
+        val referenceQuantity = if (vrQuantity >= 0) vrQuantity else currentQuantity
         
-        val safeBuyLimit = referencePoolForLimit * 0.25 // 안전 매수 한도 (VR 시점 Pool의 25%)
+        // 2. 수량 기준 한도 계산
+        // 기준 시점 매수가 (Low Valuation / referenceQuantity + 1) -> 1주를 살 때의 당시 가격으로 추정
+        // 단, 더 정확하게는 VR 시작 시점의 실제 밴드 가격을 사용하는 것이 좋으나, 
+        // 여기서는 기준 시점의 Valuation Band를 현재 수량으로 나누어 수량 한도를 산출함.
+        val referenceBuyPrice = if (referenceQuantity > 0) bands.lowValuation / (referenceQuantity + 1) else 0.0
+        
+        // 25% 금액으로 살 수 있었던 최대 수량 (고정 기준)
+        val safeBuyQuantityLimit = if (referenceBuyPrice > 0) {
+            floor((referencePoolForLimit * 0.25) / referenceBuyPrice)
+        } else {
+            0.0
+        }
+
         val totalBuyLimit = currentPool       // 최대 매수 한도 (현재 가용 Pool의 100%)
 
-        // 이미 매수한 금액: VR 시점 이후의 순수 매매 집행 금액 (매수 - 매도)
-        val alreadySpent = netTradeAmount
+        // 현재까지 이미 늘어난 수량 (VR 시점 대비)
+        val currentAddedQuantity = maxOf(0.0, currentQuantity - referenceQuantity)
 
         for (i in 1..range) {
             val sellQty = currentQuantity - i  // 매도 후 수량
@@ -196,39 +210,32 @@ object VRCalculator {
             var buyPrice = 0.0
             var isOver = false
 
-            // 1. 매도 가격 계산 (보유 수량이 남아야 가능)
-            if (sellQty >= 0) { // 0개도 매도는 가능(전량 매도)하므로 >= 0
+            // 1. 매도 가격 계산
+            if (sellQty > 0) {
                 val rawSellPrice = bands.highValuation / sellQty
-                // sellQty가 0이면 Infinity가 나오므로 처리 필요하지만, 
-                // 전량 매도 시점의 가격을 의미하므로 무한대가 맞음 -> 현실적으로 표시 불가 -> 0 처리?
-                // 아니면 전량 매도 시 bands.highValuation 이상이면 됨.
-                // 하지만 여기선 테이블 형식이므로 sellQty > 0 일때만 계산
-                if (sellQty > 0) {
-                     sellPrice = adjustPrice(rawSellPrice, false, market) // 매도: 내림
-                }
+                sellPrice = adjustPrice(rawSellPrice, false, market)
             }
 
             // 2. 매수 가격 계산
-            val rawBuyPrice = bands.lowValuation / buyQty
-            val adjustedBuyPrice = adjustPrice(rawBuyPrice, true, market)   // 매수: 올림
-            
-            // 매수 총액 = 단가 * 수량(i)
-            val purchaseAmount = adjustedBuyPrice * i
+            if (buyQty > 0) {
+                val rawBuyPrice = bands.lowValuation / buyQty
+                val adjustedBuyPrice = adjustPrice(rawBuyPrice, true, market)
+                val purchaseAmount = adjustedBuyPrice * i
 
-            // 단, adjustedBuyPrice가 0보다 크고, 전체 Pool(100%) 이내여야 함
-            if (adjustedBuyPrice > 0 && purchaseAmount <= totalBuyLimit) {
-                buyPrice = adjustedBuyPrice
-                // 25% 초과 여부 체크 (이미 매수한 금액 + 이번 매수 금액 > 안전 한도)
-                if ((alreadySpent + purchaseAmount) > safeBuyLimit) {
-                    isOver = true
+                if (adjustedBuyPrice > 0 && purchaseAmount <= totalBuyLimit) {
+                    buyPrice = adjustedBuyPrice
+                    
+                    // 총 늘어나는 수량 = (현재 이미 늘어난 수량) + (이번에 추가할 수량 i)
+                    val totalAddedQuantity = currentAddedQuantity + i
+                    
+                    // 수량 기준으로 25% 한도 초과 여부 판단 (변하지 않는 기준)
+                    if (totalAddedQuantity > safeBuyQuantityLimit) {
+                        isOver = true
+                    }
                 }
             }
 
-            // 둘 다 표시할 수 없으면 루프 종료? -> 아니오, 한쪽이라도 있으면 표시
             if (sellPrice == 0.0 && buyPrice == 0.0) {
-                // 하지만 range만큼은 돌리는게 표의 일관성을 위해 좋을수도 있음.
-                // 일단 기존 로직 유지 (둘다 0이면 break)
-                // 단, i가 작을때는 매수가가 안나와도 매도가는 나올 수 있음.
                 if (i > range) break 
             }
 
