@@ -315,8 +315,8 @@ fun MainScreen(
         AddStockDialog(
             viewModel = viewModel,
             onDismiss = { showAddDialog = false },
-            onConfirm = { name, ticker, v, g, pool, qty, price, currency, principal, startDate ->
-                viewModel.addStock(name, ticker, v, g, pool, qty, price, currency, principal, startDate)
+            onConfirm = { name, ticker, v, g, pool, qty, price, currency, principal, startDate, band, limit ->
+                viewModel.addStock(name, ticker, v, g, pool, qty, price, currency, principal, startDate, true, band, limit)
                 showAddDialog = false
             }
         )
@@ -361,7 +361,8 @@ fun StockCard(stock: Stock, yesterdayValuation: Double? = null, onClick: () -> U
     }
 
     // Calculate VR Order for Background Color
-    val bands = VRCalculator.calculateBands(stock.vValue, stock.gValue)
+    // [main][2026-06-04] VR 5.0 가이드 반영: gValue 대신 bandRatio 사용
+    val bands = VRCalculator.calculateBands(stock.vValue, stock.bandRatio)
     val order = VRCalculator.calculateOrder(currentValuation, stock.currentPrice, bands)
     
     val cardColor = when {
@@ -492,7 +493,7 @@ fun StockCard(stock: Stock, yesterdayValuation: Double? = null, onClick: () -> U
 fun AddStockDialog(
     viewModel: StockViewModel,
     onDismiss: () -> Unit,
-    onConfirm: (String, String, Double, Double, Double, Double, Double, String, Double?, Long) -> Unit
+    onConfirm: (String, String, Double, Double, Double, Double, Double, String, Double?, Long, Double, Double) -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -511,6 +512,10 @@ fun AddStockDialog(
     var poolStr by remember { mutableStateOf("") }
     var qtyStr by remember { mutableStateOf("") }
     var principalStr by remember { mutableStateOf("") }
+
+    // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율
+    var bandRatio by remember { mutableFloatStateOf(15f) }
+    var poolLimitRatio by remember { mutableFloatStateOf(0.25f) }
     
     // 시작일 정보
     var startDateMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -678,11 +683,6 @@ fun AddStockDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Column {
-                    Text("G값: ${gValue.toInt()}%", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                    Slider(value = gValue, onValueChange = { gValue = it }, valueRange = 1f..20f, steps = 18)
-                }
-
                 OutlinedTextField(
                     value = vValueStr,
                     onValueChange = { vValueStr = it },
@@ -690,6 +690,50 @@ fun AddStockDialog(
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                Divider()
+
+                // [main][2026-06-04] VR 5.0 가이드 반영: 투자 유형 및 상세 설정
+                Text("VR 투자 유형 (가이드)", style = MaterialTheme.typography.labelMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    val strategies = listOf("적립식", "거치식", "인출식", "직접입력")
+                    strategies.forEach { strategy ->
+                        FilterChip(
+                            selected = when(strategy) {
+                                "적립식" -> gValue == 10f && bandRatio == 15f && poolLimitRatio == 0.75f
+                                "거치식" -> gValue == 10f && bandRatio == 15f && poolLimitRatio == 0.50f
+                                "인출식" -> gValue == 20f && bandRatio == 15f && poolLimitRatio == 0.25f
+                                else -> false
+                            },
+                            onClick = {
+                                when(strategy) {
+                                    "적립식" -> { gValue = 10f; bandRatio = 15f; poolLimitRatio = 0.75f }
+                                    "거치식" -> { gValue = 10f; bandRatio = 15f; poolLimitRatio = 0.50f }
+                                    "인출식" -> { gValue = 20f; bandRatio = 15f; poolLimitRatio = 0.25f }
+                                }
+                            },
+                            label = { Text(strategy, style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                }
+
+                Column {
+                    Text("G값 (기울기): ${gValue.toInt()}%", fontWeight = FontWeight.Bold)
+                    Slider(value = gValue, onValueChange = { gValue = it }, valueRange = 1f..30f, steps = 29)
+                }
+
+                Column {
+                    Text("밴드 비율: ${bandRatio.toInt()}%", fontWeight = FontWeight.Bold)
+                    Slider(value = bandRatio, onValueChange = { bandRatio = it }, valueRange = 5f..30f, steps = 25)
+                }
+
+                Column {
+                    Text("사이클당 Pool 사용 제한: ${(poolLimitRatio * 100).toInt()}%", fontWeight = FontWeight.Bold)
+                    Slider(value = poolLimitRatio, onValueChange = { poolLimitRatio = it }, valueRange = 0.1f..1.0f, steps = 18)
+                }
                 
                 // 시작일 선택 버튼
                 val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(
@@ -717,7 +761,7 @@ fun AddStockDialog(
                     // 티커에 증시 suffix 포함하여 저장
                     val fullTicker = tickerInput + selectedMarket.suffix
                     if (tickerInput.isNotBlank() && price > 0) {
-                        onConfirm(name, fullTicker, v, gValue.toDouble(), pool, qty, price, selectedCurrency, principal, startDateMillis)
+                        onConfirm(name, fullTicker, v, gValue.toDouble(), pool, qty, price, selectedCurrency, principal, startDateMillis, bandRatio.toDouble(), poolLimitRatio.toDouble())
                     } else {
                         Toast.makeText(context, "종목을 먼저 조회해주세요", Toast.LENGTH_SHORT).show()
                     }

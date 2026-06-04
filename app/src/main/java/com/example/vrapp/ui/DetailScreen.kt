@@ -435,8 +435,8 @@ fun DetailScreen(
         EditStockDialog(
             stock = stock!!,
             onDismiss = { showEditDialog = false },
-            onConfirm = { name, gValue, pool, quantity, principal, startDate, defaultRecalc, isVr ->
-                viewModel.updateStockInfo(stock!!, name, gValue, pool, quantity, principal, startDate, defaultRecalc, isVr)
+            onConfirm = { name, gValue, pool, quantity, principal, startDate, defaultRecalc, isVr, band, limit ->
+                viewModel.updateStockInfo(stock!!, name, gValue, pool, quantity, principal, startDate, defaultRecalc, isVr, band, limit)
                 showEditDialog = false
             }
         )
@@ -531,7 +531,8 @@ fun TopInfoCard(stock: Stock) {
     val totalProfitLoss = currentTotal - stock.investedPrincipal
     val totalRoi = if (stock.investedPrincipal > 0) (totalProfitLoss / stock.investedPrincipal) * 100 else 0.0
     
-    val bands = VRCalculator.calculateBands(stock.vValue, stock.gValue)
+    // [main][2026-06-04] VR 5.0 가이드 반영: gValue 대신 bandRatio 및 poolLimitRatio 사용
+    val bands = VRCalculator.calculateBands(stock.vValue, stock.bandRatio)
     val order = VRCalculator.calculateOrder(currentValuation, stock.currentPrice, bands)
     val priceTable = VRCalculator.calculatePriceTable(
         currentQuantity = stock.quantity,
@@ -542,7 +543,8 @@ fun TopInfoCard(stock: Stock) {
         currency = stock.currency,
         vrPool = stock.vrPool,
         netTradeAmount = stock.netTradeAmount,
-        vrQuantity = stock.vrQuantity
+        vrQuantity = stock.vrQuantity,
+        poolLimitRatio = stock.poolLimitRatio
     )
 
     val annualizedRoi = remember(stock.startDate, totalRoi) {
@@ -1336,7 +1338,7 @@ fun ChangePrincipalDialog(
 fun EditStockDialog(
     stock: Stock,
     onDismiss: () -> Unit,
-    onConfirm: (String, Double, Double, Double, Double, Long, Double, Boolean) -> Unit
+    onConfirm: (String, Double, Double, Double, Double, Long, Double, Boolean, Double, Double) -> Unit
 ) {
     var name by remember { mutableStateOf(stock.name) }
     var gValueStr by remember { mutableStateOf(stock.gValue.toString()) }
@@ -1346,6 +1348,10 @@ fun EditStockDialog(
     var startDate by remember { mutableStateOf(stock.startDate) }
     var defaultRecalcStr by remember { mutableStateOf(stock.defaultRecalcAmount.toString()) }
     var isVr by remember { mutableStateOf(stock.isVr) }
+    
+    // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율
+    var bandRatioStr by remember { mutableStateOf(stock.bandRatio.toString()) }
+    var poolLimitRatioStr by remember { mutableStateOf(stock.poolLimitRatio.toString()) }
 
     var showDatePicker by remember { mutableStateOf(false) }
     var showWarningConfirm by remember { mutableStateOf(false) }
@@ -1424,6 +1430,29 @@ fun EditStockDialog(
                     value = gValueStr,
                     onValueChange = { gValueStr = it },
                     label = { Text("G값 (%)") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율
+                OutlinedTextField(
+                    value = bandRatioStr,
+                    onValueChange = { bandRatioStr = it },
+                    label = { Text("밴드 비율 (%)") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                OutlinedTextField(
+                    value = poolLimitRatioStr,
+                    onValueChange = { poolLimitRatioStr = it },
+                    label = { Text("Pool 제한 비율 (0.25 등)") },
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                     ),
@@ -1571,9 +1600,11 @@ fun EditStockDialog(
                         val quantity = quantityStr.toDoubleOrNull() ?: stock.quantity
                         val principal = principalStr.toDoubleOrNull() ?: stock.investedPrincipal
                         val defaultRecalc = defaultRecalcStr.toDoubleOrNull() ?: stock.defaultRecalcAmount
+                        val bandRatio = bandRatioStr.toDoubleOrNull() ?: stock.bandRatio
+                        val poolLimitRatio = poolLimitRatioStr.toDoubleOrNull() ?: stock.poolLimitRatio
 
                         if (name.isNotBlank()) {
-                            onConfirm(name, gValue, pool, quantity, principal, startDate, defaultRecalc, isVr)
+                            onConfirm(name, gValue, pool, quantity, principal, startDate, defaultRecalc, isVr, bandRatio, poolLimitRatio)
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))

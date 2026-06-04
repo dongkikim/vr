@@ -431,7 +431,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addStock(name: String, ticker: String, v: Double, g: Double, pool: Double, qty: Double, price: Double, currency: String = "KRW", principal: Double? = null, startDate: Long = System.currentTimeMillis(), isVr: Boolean = true) {
+    fun addStock(name: String, ticker: String, v: Double, g: Double, pool: Double, qty: Double, price: Double, currency: String = "KRW", principal: Double? = null, startDate: Long = System.currentTimeMillis(), isVr: Boolean = true, bandRatio: Double = 15.0, poolLimitRatio: Double = 0.25) {
         viewModelScope.launch {
             // 초기 원금: 입력값이 없으면 (Price * Qty) + Pool로 자동 계산
             val initialPrincipal = principal ?: ((price * qty) + pool)
@@ -449,7 +449,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 currency = currency,
                 investedPrincipal = initialPrincipal,
                 startDate = startDate,
-                isVr = isVr
+                isVr = isVr,
+                // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율 초기화
+                bandRatio = bandRatio,
+                poolLimitRatio = poolLimitRatio
             )
             repository.addStock(stock)
             updateDailySnapshot()
@@ -534,7 +537,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 previousPrincipal = stock.investedPrincipal,
                 previousVrPool = stock.vrPool,
                 previousVrQuantity = stock.vrQuantity,
-                previousNetTradeAmount = stock.netTradeAmount
+                previousNetTradeAmount = stock.netTradeAmount,
+                // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율 이력 저장
+                previousBandRatio = stock.bandRatio,
+                previousPoolLimitRatio = stock.poolLimitRatio
             )
             repository.addTransaction(history)
 
@@ -564,7 +570,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 previousPrincipal = stock.investedPrincipal,
                 previousVrPool = stock.vrPool,
                 previousVrQuantity = stock.vrQuantity,
-                previousNetTradeAmount = stock.netTradeAmount
+                previousNetTradeAmount = stock.netTradeAmount,
+                // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율 이력 저장
+                previousBandRatio = stock.bandRatio,
+                previousPoolLimitRatio = stock.poolLimitRatio
             )
             repository.addTransaction(history)
 
@@ -611,7 +620,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         investedPrincipal: Double,
         startDate: Long,
         defaultRecalcAmount: Double,
-        isVr: Boolean
+        isVr: Boolean,
+        // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율 추가
+        bandRatio: Double,
+        poolLimitRatio: Double
     ) {
         viewModelScope.launch {
             // MANUAL_EDIT 거래 기록 추가 (이전 상태 저장하지 않음 - 삭제 불가)
@@ -627,7 +639,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 previousQuantity = -1.0,  // 삭제 불가 표시
                 previousPrincipal = -1.0,  // 삭제 불가 표시
                 previousVrPool = -1.0,
-                previousNetTradeAmount = 0.0
+                previousNetTradeAmount = 0.0,
+                previousBandRatio = -1.0,
+                previousPoolLimitRatio = -1.0
             )
             repository.addTransaction(editHistory)
 
@@ -639,7 +653,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 investedPrincipal = investedPrincipal,
                 startDate = startDate,
                 defaultRecalcAmount = defaultRecalcAmount,
-                isVr = isVr
+                isVr = isVr,
+                bandRatio = bandRatio,
+                poolLimitRatio = poolLimitRatio
             )
             repository.updateStock(updatedStock)
             _currentStock.value = updatedStock
@@ -701,7 +717,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 previousPrincipal = principalBeforeRecalc,
                 previousVrPool = stock.vrPool,
                 previousVrQuantity = stock.vrQuantity,
-                previousNetTradeAmount = stock.netTradeAmount
+                previousNetTradeAmount = stock.netTradeAmount,
+                // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율 이력 저장
+                previousBandRatio = stock.bandRatio,
+                previousPoolLimitRatio = stock.poolLimitRatio
             )
             repository.addTransaction(recalcHistory)
 
@@ -793,7 +812,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 previousPrincipal = stock.investedPrincipal,
                 previousVrPool = stock.vrPool,
                 previousVrQuantity = stock.vrQuantity,
-                previousNetTradeAmount = stock.netTradeAmount
+                previousNetTradeAmount = stock.netTradeAmount,
+                // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율 이력 저장
+                previousBandRatio = stock.bandRatio,
+                previousPoolLimitRatio = stock.poolLimitRatio
             )
             repository.addTransaction(history)
 
@@ -830,7 +852,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 investedPrincipal = transaction.previousPrincipal,
                 vrPool = transaction.previousVrPool,
                 vrQuantity = transaction.previousVrQuantity,
-                netTradeAmount = transaction.previousNetTradeAmount
+                netTradeAmount = transaction.previousNetTradeAmount,
+                // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율 원복
+                bandRatio = transaction.previousBandRatio,
+                poolLimitRatio = transaction.previousPoolLimitRatio
             )
             repository.updateStock(restoredStock)
             _currentStock.value = restoredStock

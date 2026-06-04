@@ -40,7 +40,14 @@ data class Stock(
     val vrQuantity: Double = -1.0, // VR 시점의 수량 (매수 한도 계산용)
 
     @ColumnInfo(defaultValue = "0.0")
-    val netTradeAmount: Double = 0.0 // VR 시점 이후의 순수 매매 집행 금액 (매수 - 매도)
+    val netTradeAmount: Double = 0.0, // VR 시점 이후의 순수 매매 집행 금액 (매수 - 매도)
+
+    // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율 분리
+    @ColumnInfo(defaultValue = "15.0")
+    val bandRatio: Double = 15.0, // 밴드 비율 (기본 15%)
+
+    @ColumnInfo(defaultValue = "0.25")
+    val poolLimitRatio: Double = 0.25 // 사이클당 Pool 사용 제한 비율 (기본 25%)
 )
 
 @Entity(tableName = "transactions")
@@ -66,7 +73,14 @@ data class TransactionHistory(
     @ColumnInfo(defaultValue = "-1.0")
     val previousVrQuantity: Double = -1.0,
     @ColumnInfo(defaultValue = "0.0")
-    val previousNetTradeAmount: Double = 0.0
+    val previousNetTradeAmount: Double = 0.0,
+
+    // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율 분리
+    @ColumnInfo(defaultValue = "15.0")
+    val previousBandRatio: Double = 15.0,
+
+    @ColumnInfo(defaultValue = "0.25")
+    val previousPoolLimitRatio: Double = 0.25
 ) {
     // 이전 상태 정보가 있는지 확인 (삭제 가능 여부)
     // 수량은 절대 음수가 될 수 없으므로 previousQuantity만 체크 (-1이면 마이그레이션 전 데이터)

@@ -37,12 +37,13 @@ object VRCalculator {
     }
 
     /**
-     * Calculates the Low and High bands based on Value (V) and Gradient (G).
-     * Low Valuation = V * (1 - G/100)
-     * High Valuation = V * (1 + G/100)
+     * Calculates the Low and High bands based on Value (V) and Band Ratio.
+     * Low Valuation = V * (1 - bandRatio/100)
+     * High Valuation = V * (1 + bandRatio/100)
      */
-    fun calculateBands(v: Double, g: Double): VRBands {
-        val ratio = g / 100.0
+    // [main][2026-06-04] VR 5.0 가이드 반영: G 대신 별도의 bandRatio 사용
+    fun calculateBands(v: Double, bandRatio: Double): VRBands {
+        val ratio = bandRatio / 100.0
         val lowVal = v * (1 - ratio)
         val highVal = v * (1 + ratio)
         
@@ -175,7 +176,9 @@ object VRCalculator {
         currency: String = "KRW",
         vrPool: Double = -1.0,
         netTradeAmount: Double = 0.0,
-        vrQuantity: Double = -1.0
+        vrQuantity: Double = -1.0,
+        // [main][2026-06-04] VR 5.0 가이드 반영: 하드코딩된 0.25를 poolLimitRatio로 대체
+        poolLimitRatio: Double = 0.25
     ): List<PriceByQuantity> {
         val result = mutableListOf<PriceByQuantity>()
         val market = getMarketType(ticker, currency)
@@ -190,9 +193,9 @@ object VRCalculator {
         // 여기서는 기준 시점의 Valuation Band를 현재 수량으로 나누어 수량 한도를 산출함.
         val referenceBuyPrice = if (referenceQuantity > 0) bands.lowValuation / (referenceQuantity + 1) else 0.0
         
-        // 25% 금액으로 살 수 있었던 최대 수량 (고정 기준)
+        // poolLimitRatio 금액으로 살 수 있었던 최대 수량 (고정 기준)
         val safeBuyQuantityLimit = if (referenceBuyPrice > 0) {
-            floor((referencePoolForLimit * 0.25) / referenceBuyPrice)
+            floor((referencePoolForLimit * poolLimitRatio) / referenceBuyPrice)
         } else {
             0.0
         }

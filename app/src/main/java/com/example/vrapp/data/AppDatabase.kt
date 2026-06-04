@@ -149,14 +149,15 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
 
 @Database(
     entities = [Stock::class, TransactionHistory::class, DailyAssetHistory::class, StockHistory::class],
-    version = 13,
+    version = 14,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 4, to = 5),
         AutoMigration(from = 5, to = 6),
         AutoMigration(from = 7, to = 8), // TransactionHistory에 previousPool, previousQuantity, previousPrincipal 추가
         AutoMigration(from = 8, to = 9), // Change quantity to Double
-        AutoMigration(from = 9, to = 10) // Stock에 isVr 추가
+        AutoMigration(from = 9, to = 10), // Stock에 isVr 추가
+        AutoMigration(from = 13, to = 14) // [main][2026-06-04] bandRatio, poolLimitRatio 필드 추가
     ]
 )
 abstract class AppDatabase : RoomDatabase() {
