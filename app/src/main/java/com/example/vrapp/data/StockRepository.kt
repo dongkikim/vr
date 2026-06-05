@@ -43,6 +43,7 @@ class StockRepository(
     suspend fun deleteIbStock(id: Long) = ibDao.deleteIbStock(id)
 
     fun getIbHistory(stockId: Long): Flow<List<IbTransaction>> = ibDao.getHistoryForIbStock(stockId)
+    suspend fun getTransactionsForCycle(stockId: Long, cycleNumber: Int): List<IbTransaction> = ibDao.getTransactionsForCycle(stockId, cycleNumber)
     suspend fun addIbTransaction(transaction: IbTransaction) = ibDao.insertIbTransaction(transaction)
     suspend fun deleteIbTransaction(id: Long) = ibDao.deleteIbTransaction(id)
     suspend fun getLatestIbTransaction(stockId: Long): IbTransaction? = ibDao.getLatestTransaction(stockId)

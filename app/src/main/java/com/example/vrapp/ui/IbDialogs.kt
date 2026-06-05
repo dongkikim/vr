@@ -256,6 +256,8 @@ fun IbWalletStatusTab(history: List<com.example.vrapp.model.DailyAssetHistory>) 
                                 legend.isEnabled = true
                                 xAxis.position = com.github.mikephil.charting.components.XAxis.XAxisPosition.BOTTOM
                                 xAxis.setDrawGridLines(false)
+                                xAxis.granularity = 1f
+                                xAxis.isGranularityEnabled = true
                                 axisRight.isEnabled = false
                                 setTouchEnabled(true)
                                 setPinchZoom(true)
@@ -278,6 +280,21 @@ fun IbWalletStatusTab(history: List<com.example.vrapp.model.DailyAssetHistory>) 
                                 setDrawValues(false)
                             }
                             
+                            // X축 날짜 포맷터 적용 (YYYY-MM-DD -> MM/dd)
+                            chart.xAxis.apply {
+                                val labels = filteredHistory.map { item ->
+                                    try {
+                                        val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(item.date)
+                                        if (date != null) SimpleDateFormat("MM/dd", Locale.getDefault()).format(date) else item.date
+                                    } catch (e: Exception) {
+                                        item.date
+                                    }
+                                }
+                                valueFormatter = com.github.mikephil.charting.formatter.IndexAxisValueFormatter(labels.toTypedArray())
+                                granularity = 1f
+                                setLabelCount(minOf(filteredHistory.size, 5), true)
+                            }
+
                             chart.data = com.github.mikephil.charting.data.LineData(pSet, vSet)
                             chart.invalidate()
                         }

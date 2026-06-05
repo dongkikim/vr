@@ -56,6 +56,53 @@ class IbViewModel(application: Application) : AndroidViewModel(application) {
             if (repository.getIbAccount("KRW") == null) {
                 repository.insertIbAccount(IbAccount(currency = "KRW", balance = 0.0, totalInvested = 0.0))
             }
+            
+            // [main][2026-06-05] 기존 종목들의 왜곡된 평단가 자동 보정 실행
+            recalculateAllAveragePrices()
+        }
+    }
+
+    /**
+     * 기존 거래 내역을 기반으로 모든 종목의 평단가를 다시 계산하여 보정합니다.
+     */
+    private suspend fun recalculateAllAveragePrices() {
+        val stocks = repository.allIbStocks.first()
+        stocks.forEach { stock ->
+            // 현재 평단가가 0이거나 데이터 왜곡 가능성이 있는 경우 재계산
+            val history = repository.getTransactionsForCycle(stock.id, stock.cycleCount)
+            if (history.isNotEmpty()) {
+                var calculatedAvgPrice = 0.0
+                var currentQty = 0.0
+                
+                history.forEach { trans ->
+                    when {
+                        trans.type.contains("BUY") -> {
+                            val totalCost = (currentQty * calculatedAvgPrice) + (trans.quantity * trans.price)
+                            currentQty += trans.quantity
+                            calculatedAvgPrice = if (currentQty > 0) totalCost / currentQty else 0.0
+                        }
+                        trans.type.contains("SELL") -> {
+                            currentQty -= trans.quantity
+                            // 매도시 평단 유지
+                            if (currentQty <= 0) {
+                                calculatedAvgPrice = 0.0
+                                currentQty = 0.0
+                            }
+                        }
+                        trans.type == "SPLIT" -> {
+                            // 분할은 trans.quantity가 최종 수량이라고 가정 (기존 로직 참고)
+                            val ratio = if (currentQty > 0) trans.quantity / currentQty else 1.0
+                            currentQty = trans.quantity
+                            calculatedAvgPrice /= ratio
+                        }
+                    }
+                }
+                
+                // 계산된 평단가로 업데이트 (수량은 건드리지 않음)
+                if (calculatedAvgPrice != stock.averagePrice) {
+                    repository.updateIbStock(stock.copy(averagePrice = calculatedAvgPrice))
+                }
+            }
         }
     }
 
@@ -152,7 +199,9 @@ class IbViewModel(application: Application) : AndroidViewModel(application) {
                 divisions = divisions,
                 volatility = volatility,
                 currentT = initialT,
-                currentPrice = initialPrice
+                currentPrice = initialPrice,
+                // [main][2026-06-05] 초기 평단가 설정
+                averagePrice = if (initialQty > 0) initialPrice else 0.0
             )
             repository.addIbStock(newStock)
         }
@@ -200,6 +249,8 @@ class IbViewModel(application: Application) : AndroidViewModel(application) {
             previousPool = stock.pool,
             previousIsReverseMode = stock.isReverseMode,
             previousCycleCount = stock.cycleCount,
+            // [main][2026-06-05] 롤백을 위한 이전 평단가 기록
+            previousAveragePrice = stock.averagePrice,
             cycleNumber = stock.cycleCount
         )
         repository.addIbTransaction(transaction)
@@ -207,23 +258,35 @@ class IbViewModel(application: Application) : AndroidViewModel(application) {
         // 2. 종목 상태 갱신
         var newPool = stock.pool
         var newQty = stock.quantity
+        var newAvgPrice = stock.averagePrice
         
         if (type.startsWith("BUY")) {
-            newPool -= amount
+            // 매수: 가중 평균으로 평단가 갱신
+            val totalCost = (newQty * newAvgPrice) + (quantity * price)
             newQty += quantity
+            newAvgPrice = if (newQty > 0) totalCost / newQty else 0.0
+            newPool -= amount
         } else if (type.startsWith("SELL") || type == "REVERSE_SELL") {
-            newPool += amount
+            // 매도: 수량만 감소, 평단가는 유지
             newQty -= quantity
+            newPool += amount
+            if (newQty <= 0) {
+                newAvgPrice = 0.0
+                newQty = 0.0
+            }
         } else if (type == "SPLIT") {
-            // 액면분할: 수량 및 평단가만 조정 (amount는 여기서 비율로 처리될 예정)
-            newQty = quantity // 전달받은 최종 수량으로 덮어씀
+            // 액면분할: 수량 및 평단가만 조정
+            val ratio = if (newQty > 0) quantity / newQty else 1.0
+            newQty = quantity 
+            newAvgPrice /= ratio
         }
 
         val updatedStock = stock.copy(
             pool = newPool,
             quantity = newQty,
             currentT = nextT,
-            isReverseMode = willBeReverse
+            isReverseMode = willBeReverse,
+            averagePrice = newAvgPrice
         )
         repository.updateIbStock(updatedStock)
         _currentIbStock.value = updatedStock
@@ -246,7 +309,9 @@ class IbViewModel(application: Application) : AndroidViewModel(application) {
                 pool = transaction.previousPool,
                 isReverseMode = transaction.previousIsReverseMode,
                 cycleCount = if (transaction.previousCycleCount > 0) transaction.previousCycleCount else stock.cycleCount,
-                quantity = if (transaction.type == "SPLIT") stock.quantity else (if (transaction.type.contains("BUY")) stock.quantity - transaction.quantity else stock.quantity + transaction.quantity)
+                quantity = if (transaction.type == "SPLIT") stock.quantity else (if (transaction.type.contains("BUY")) stock.quantity - transaction.quantity else stock.quantity + transaction.quantity),
+                // [main][2026-06-05] 이전 평단가로 복구
+                averagePrice = transaction.previousAveragePrice
             )
             
             // 만약 사이클이 종료되어 지갑에 합산되었던 건이라면? (구조상 사이클 종료는 별도의 입금 transaction으로 기록하는것이 안전)
@@ -378,6 +443,15 @@ class IbViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 _isRefreshing.value = false
             }
+        }
+    }
+
+    // [main][2026-06-05] 무한매수 종목명 수정 기능 추가
+    fun updateIbStockName(stock: IbStock, newName: String) {
+        viewModelScope.launch {
+            val updatedStock = stock.copy(name = newName)
+            repository.updateIbStock(updatedStock)
+            _currentIbStock.value = updatedStock
         }
     }
     

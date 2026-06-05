@@ -45,6 +45,8 @@ fun IbDetailScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     var showTransactionDialog by remember { mutableStateOf(false) }
     var showCycleEndDialog by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(ibStockId) {
         viewModel.loadIbStock(ibStockId)
@@ -66,6 +68,23 @@ fun IbDetailScreen(
                 },
                 actions = {
                     IconButton(onClick = { viewModel.refreshPrices() }) { Icon(Icons.Default.Refresh, contentDescription = null) }
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "더보기")
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("정보 수정") },
+                                onClick = {
+                                    showMenu = false
+                                    showEditDialog = true
+                                }
+                            )
+                        }
+                    }
                 }
             )
         },
@@ -134,6 +153,67 @@ fun IbDetailScreen(
             onDismiss = { showCycleEndDialog = false }
         )
     }
+
+    // [main][2026-06-05] 무한매수 종목 정보 수정 다이얼로그 추가
+    if (showEditDialog && stock != null) {
+        IbEditStockDialog(
+            stock = stock!!,
+            onDismiss = { showEditDialog = false },
+            onConfirm = { newName ->
+                viewModel.updateIbStockName(stock!!, newName)
+                showEditDialog = false
+            }
+        )
+    }
+}
+
+/**
+ * 무한매수 종목 정보 수정 다이얼로그
+ * 현재는 종목명 수정을 우선 지원함
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun IbEditStockDialog(
+    stock: IbStock,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember { mutableStateOf(stock.name) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("종목 정보 수정") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("종목명") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                
+                Text(
+                    text = "티커(${stock.ticker}) 및 주요 설정값은 현재 화면에서 직접 수정이 불가능합니다.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.Gray
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (name.isNotBlank()) {
+                        onConfirm(name)
+                    }
+                },
+                enabled = name.isNotBlank() && name != stock.name
+            ) { Text("저장") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("취소") }
+        }
+    )
 }
 
 @Composable
@@ -224,18 +304,49 @@ fun IbCycleEndDialog(
 
 @Composable
 fun IbEnhancedHeader(stock: IbStock, history: List<IbTransaction>) {
-    val totalAsset = (stock.currentPrice * stock.quantity) + stock.pool
-    val currentProfit = totalAsset - stock.principal
-    val currentRoi = if (stock.principal > 0) (currentProfit / stock.principal) * 100 else 0.0
+    // 1. 현재 보유 주식의 평가 손익 계산
+    val currentMarketValue = stock.currentPrice * stock.quantity
+    val currentPurchaseCost = stock.averagePrice * stock.quantity
+    val unrealizedProfit = if (stock.quantity > 0) currentMarketValue - currentPurchaseCost else 0.0
+    val unrealizedRoi = if (currentPurchaseCost > 0) (unrealizedProfit / currentPurchaseCost) * 100 else 0.0
+
+    // 2. 현재 사이클 내에서의 실현 손익 (매매 수익) 계산
+    val currentCycleHistory = history.filter { it.cycleNumber == stock.cycleCount }
+    var realizedProfit = 0.0
+    var tempQty = 0.0
+    var tempAvgPrice = 0.0
+
+    // 과거 거래를 순차적으로 훑으며 매도 시점의 실현 손익 합산
+    currentCycleHistory.sortedBy { it.date }.forEach { trans ->
+        if (trans.type.contains("BUY")) {
+            val totalCost = (tempQty * tempAvgPrice) + (trans.quantity * trans.price)
+            tempQty += trans.quantity
+            tempAvgPrice = if (tempQty > 0) totalCost / tempQty else 0.0
+        } else if (trans.type.contains("SELL")) {
+            // 매도 시: (매도가 - 당시평단) * 매도수량
+            realizedProfit += (trans.price - tempAvgPrice) * trans.quantity
+            tempQty -= trans.quantity
+            if (tempQty <= 0) {
+                tempAvgPrice = 0.0
+                tempQty = 0.0
+            }
+        } else if (trans.type == "SPLIT") {
+            val ratio = if (tempQty > 0) trans.quantity / tempQty else 1.0
+            tempQty = trans.quantity
+            tempAvgPrice /= ratio
+        }
+    }
+
+    // 3. 사이클 총합 및 누적 지표
+    val cycleTotalProfit = realizedProfit + unrealizedProfit
+    val totalAsset = currentMarketValue + stock.pool
     
-    // 전체 누적 수익 계산: (과거 사이클의 실현 손익) + (현재 사이클의 평가 손익)
-    val pastCyclesProfit = history.filter { it.cycleNumber < stock.cycleCount }
-        .sumOf { if (it.type.contains("SELL")) it.amount else -it.amount }
-    val totalCumulativeProfit = currentProfit + pastCyclesProfit
+    // 전체 누적 수익: (과거 사이클의 최종 실현 손익 합계) + (현재 사이클의 총 수익)
+    val totalCumulativeProfit = stock.totalRealizedProfit + cycleTotalProfit
     val totalRoi = if (stock.principal > 0) (totalCumulativeProfit / stock.principal) * 100 else 0.0
     
     val progress = (stock.currentT / stock.divisions.toDouble()).coerceIn(0.0, 1.0)
-    val avgPrice = if(stock.quantity > 0) (stock.principal - stock.pool)/stock.quantity else 0.0
+    val avgPrice = stock.averagePrice
 
     Column(
         modifier = Modifier
@@ -243,42 +354,58 @@ fun IbEnhancedHeader(stock: IbStock, history: List<IbTransaction>) {
             .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp)
     ) {
-        // Row 1: 주요 수치 (자산, 손익)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
+        // Row 1: 주요 수치 (자산)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Column {
                 Text("총 평가 자산", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                 Text(if(stock.principal > 0) formatCurrency(totalAsset, stock.currency) else "-", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
             }
+            
             Column(horizontalAlignment = Alignment.End) {
                 if(stock.principal > 0) {
                     Text(
-                        text = "현재: ${formatCurrency(currentProfit, stock.currency)} (${String.format("%+.2f", currentRoi)}%)",
+                        text = "사이클 수익: ${formatCurrency(cycleTotalProfit, stock.currency)}",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = if (currentRoi >= 0) Color.Red else Color.Blue
+                        color = if (cycleTotalProfit >= 0) Color.Red else Color.Blue
+                    )
+                    Text(
+                        text = "누적 합계: ${formatCurrency(totalCumulativeProfit, stock.currency)} (${String.format("%+.2f", totalRoi)}%)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (totalCumulativeProfit >= 0) Color.Red else Color.Blue
                     )
                 } else {
                     Text("새 사이클 대기 중", style = MaterialTheme.typography.titleMedium, color = Color.Gray, fontWeight = FontWeight.Bold)
                 }
-                
-                // 누적 수익은 원금 유무와 상관없이 이력이 있으면 표시
-                if (totalCumulativeProfit != 0.0 || history.isNotEmpty()) {
-                    // 대기 중일 때는 수익률 계산 기준이 없으므로 금액 위주로 표시하거나, 
-                    // 로직상 마지막 원금을 알 수 있다면 계산 (여기서는 안전하게 금액 + 가능한 경우 ROI 표시)
-                    val displayRoi = if (stock.principal > 0) totalRoi else {
-                        // 대기 중일 때 누적 ROI를 보여주고 싶다면 마지막 사이클의 원금을 찾아볼 수 있음 (선택 사항)
-                        0.0 
-                    }
-                    
-                    Text(
-                        text = if(stock.principal > 0) {
-                            "누적: ${formatCurrency(totalCumulativeProfit, stock.currency)} (${String.format("%+.2f", totalRoi)}%)"
-                        } else {
-                            "누적 수익: ${formatCurrency(totalCumulativeProfit, stock.currency)}"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        color = if (totalCumulativeProfit >= 0) Color.Red else Color.Blue
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        
+        // 수익 세분화 (실현 vs 평가)
+        if (stock.principal > 0) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                    .padding(10.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("실현 수익 (매도)", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text(formatCurrency(realizedProfit, stock.currency), 
+                        style = MaterialTheme.typography.bodyMedium, 
+                        fontWeight = FontWeight.Bold,
+                        color = if (realizedProfit >= 0) Color.Red else Color.Blue
+                    )
+                }
+                Box(modifier = Modifier.width(1.dp).height(24.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("평가 수익 (보유)", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text("${formatCurrency(unrealizedProfit, stock.currency)} (${String.format("%+.2f", unrealizedRoi)}%)", 
+                        style = MaterialTheme.typography.bodyMedium, 
+                        fontWeight = FontWeight.Bold,
+                        color = if (unrealizedProfit >= 0) Color.Red else Color.Blue
                     )
                 }
             }
@@ -345,7 +472,8 @@ fun IbCurrentTab(
     if (stock.principal <= 0) {
         IbRestartUI(stock, onRestartCycle)
     } else {
-        val avgPrice = if(stock.quantity > 0) (stock.principal - stock.pool)/stock.quantity else stock.currentPrice
+        // [main][2026-06-05] 수동 계산식 제거하고 DB의 정확한 평단가 사용
+        val avgPrice = stock.averagePrice
         val guide = IBCalculator.generateDailyGuide(
             ticker = stock.ticker,
             currency = stock.currency,

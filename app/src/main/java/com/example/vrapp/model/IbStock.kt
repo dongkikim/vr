@@ -29,5 +29,7 @@ data class IbStock(
     var currentT: Double = 0.0, // 현재 진행 회차
     var isReverseMode: Boolean = false, // 리버스 모드 여부
     var cycleCount: Int = 1, // 현재 진행 중인 사이클 회차 (1회차, 2회차...)
-    @ColumnInfo(defaultValue = "0.0") val totalRealizedProfit: Double = 0.0 // 과거 사이클에서 실현된 누적 손익 합계
+    @ColumnInfo(defaultValue = "0.0") val totalRealizedProfit: Double = 0.0, // 과거 사이클에서 실현된 누적 손익 합계
+    // [main][2026-06-05] 매도 수익이 평단가를 왜곡하는 문제 해결을 위해 명시적 평단가 필드 추가
+    @ColumnInfo(defaultValue = "0.0") val averagePrice: Double = 0.0
 )

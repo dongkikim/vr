@@ -64,9 +64,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     // --- 필터 및 정렬 기능 ---
     enum class StockFilter(val label: String) {
         ALL("전체"),
-        VR("VR 종목"),
-        NON_VR("일반 종목"),
-        IB("무한매수")
+        VR("VR"),
+        IB("무한매수"),
+        NON_VR("일반")
     }
 
     enum class StockSort(val label: String) {
@@ -162,7 +162,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     data class AssetStatus(
         val totalPrincipal: Double = 0.0,
         val totalCurrent: Double = 0.0,
-        val totalROI: Double = 0.0
+        val totalROI: Double = 0.0,
+        val ibPrincipal: Double = 0.0,
+        val ibCurrentValue: Double = 0.0,
+        val ibROI: Double = 0.0
     )
 
     // ... (Existing helper methods)
@@ -442,7 +445,13 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         val current = vrCurrent + ibStockCurrent + ibWalletBalance
         
         val roi = if (principal > 0) ((current - principal) / principal) * 100 else 0.0
-        AssetStatus(principal, current, roi)
+        
+        // 무한매수 개별 현황
+        val ibPrincipal = ibWalletTotalInvested
+        val ibCurrentValue = ibStockCurrent + ibWalletBalance
+        val ibROI = if (ibPrincipal > 0) ((ibCurrentValue - ibPrincipal) / ibPrincipal) * 100 else 0.0
+
+        AssetStatus(principal, current, roi, ibPrincipal, ibCurrentValue, ibROI)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),

@@ -147,7 +147,7 @@ fun MainScreen(
 
             // 3. 무한매수 지갑 대시보드 (IB 필터 시에만 노출)
             if (currentFilter == StockViewModel.StockFilter.IB) {
-                IbWalletDashboard(ibAccounts) { showWalletDialog = true }
+                IbWalletDashboard(ibAccounts, assetStatus) { showWalletDialog = true }
             }
 
             Divider()
@@ -272,11 +272,7 @@ fun FilterAndSortBar(
     
     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         LazyRow(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val allFilters = StockViewModel.StockFilter.entries.toMutableList()
-            if (!allFilters.any { it.name == "IB" }) {
-                // IB 필터가 동적으로 추가되지 않았을 경우를 대비해 UI 전용으로라도 추가 (실제로는 ViewModel Enum 수정 필요)
-            }
-            items(allFilters) { filter ->
+            items(StockViewModel.StockFilter.entries) { filter ->
                 FilterChip(
                     selected = currentFilter == filter,
                     onClick = { onFilterChange(filter) },
@@ -299,25 +295,62 @@ fun FilterAndSortBar(
 }
 
 @Composable
-fun IbWalletDashboard(accounts: List<com.example.vrapp.model.IbAccount>, onWalletClick: () -> Unit) {
+fun IbWalletDashboard(
+    accounts: List<com.example.vrapp.model.IbAccount>, 
+    assetStatus: StockViewModel.AssetStatus,
+    onWalletClick: () -> Unit
+) {
+    val ibProfit = assetStatus.ibCurrentValue - assetStatus.ibPrincipal
+    
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable { onWalletClick() },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("무한매수 통합 지갑", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("무한매수 통합 자산 현황", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                }
+                Text("상세보기 >", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             }
-            Spacer(Modifier.height(4.dp))
-            accounts.forEach { acc ->
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("${acc.currency} 잔액", style = MaterialTheme.typography.bodySmall)
-                    Text(formatCurrency(acc.balance, acc.currency), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+            
+            Spacer(Modifier.height(8.dp))
+            
+            // 통합 수치
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("총 투입 원금", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text(formatCurrency(assetStatus.ibPrincipal, "KRW"), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                }
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("현재 평가 자산", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text(formatCurrency(assetStatus.ibCurrentValue, "KRW"), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                }
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                    Text("누적 손익", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text(
+                        text = "${formatCurrency(ibProfit, "KRW")} (${String.format("%+.1f%%", assetStatus.ibROI)})",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (ibProfit >= 0) Color.Red else Color.Blue
+                    )
                 }
             }
-            Text("탭하여 시드 충전/출금", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.6f))
+
+            Spacer(Modifier.height(12.dp))
+            Divider(color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.1f))
+            Spacer(Modifier.height(8.dp))
+
+            // 지갑 잔액 요약
+            Text("지갑 잔액 (미할당 시드)", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+            accounts.forEach { acc ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("${acc.currency}", style = MaterialTheme.typography.bodySmall)
+                    Text(formatCurrency(acc.balance, acc.currency), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                }
+            }
         }
     }
 }
@@ -531,7 +564,7 @@ fun AddStockDialog(
                 // 1. 전략 선택
                 Text("투자 전략 선택", style = MaterialTheme.typography.labelMedium)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf("VR" to "가치분할", "GENERAL" to "일반", "IB" to "무한매수").forEach { (code, label) ->
+                    listOf("VR" to "VR", "IB" to "무한매수", "GENERAL" to "일반").forEach { (code, label) ->
                         FilterChip(
                             selected = selectedStrategy == code,
                             onClick = { selectedStrategy = code },

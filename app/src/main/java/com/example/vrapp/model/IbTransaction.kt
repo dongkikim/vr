@@ -23,6 +23,9 @@ data class IbTransaction(
     val previousIsReverseMode: Boolean,
     @ColumnInfo(defaultValue = "-1")
     val previousCycleCount: Int = -1,
+    // [main][2026-06-05] 롤백용 이전 평단가 기록 추가
+    @ColumnInfo(defaultValue = "0.0")
+    val previousAveragePrice: Double = 0.0,
 
     val cycleNumber: Int // 해당 거래가 발생한 사이클 회차
 )
