@@ -16,6 +16,9 @@ import com.example.vrapp.model.Stock
 import com.example.vrapp.model.TransactionHistory
 import com.example.vrapp.model.DailyAssetHistory
 import com.example.vrapp.model.StockHistory
+import com.example.vrapp.model.IbAccount
+import com.example.vrapp.model.IbStock
+import com.example.vrapp.model.IbTransaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -148,8 +151,17 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
 }
 
 @Database(
-    entities = [Stock::class, TransactionHistory::class, DailyAssetHistory::class, StockHistory::class],
-    version = 14,
+    entities = [
+        Stock::class, 
+        TransactionHistory::class, 
+        DailyAssetHistory::class, 
+        StockHistory::class,
+        IbAccount::class,
+        IbStock::class,
+        IbTransaction::class,
+        com.example.vrapp.model.IbWalletHistory::class
+    ],
+    version = 17,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 4, to = 5),
@@ -157,11 +169,15 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
         AutoMigration(from = 7, to = 8), // TransactionHistory에 previousPool, previousQuantity, previousPrincipal 추가
         AutoMigration(from = 8, to = 9), // Change quantity to Double
         AutoMigration(from = 9, to = 10), // Stock에 isVr 추가
-        AutoMigration(from = 13, to = 14) // [main][2026-06-04] bandRatio, poolLimitRatio 필드 추가
+        AutoMigration(from = 13, to = 14), // [main][2026-06-04] bandRatio, poolLimitRatio 필드 추가
+        AutoMigration(from = 14, to = 15),  // [main][2026-06-04] 무한매수(IB) 관련 테이블 추가
+        AutoMigration(from = 15, to = 16),   // 지갑 변동 내역 테이블 추가
+        AutoMigration(from = 16, to = 17)   // IbStock에 totalRealizedProfit 추가, DailyAssetHistory에 ibPrincipal/Value 추가
     ]
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun stockDao(): StockDao
+    abstract fun ibDao(): IbDao
 
     companion object {
         @Volatile

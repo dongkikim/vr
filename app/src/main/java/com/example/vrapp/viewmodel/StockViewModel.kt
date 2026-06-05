@@ -65,7 +65,8 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     enum class StockFilter(val label: String) {
         ALL("전체"),
         VR("VR 종목"),
-        NON_VR("일반 종목")
+        NON_VR("일반 종목"),
+        IB("무한매수")
     }
 
     enum class StockSort(val label: String) {
@@ -101,6 +102,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
             StockFilter.ALL -> stocks
             StockFilter.VR -> stocks.filter { it.isVr }
             StockFilter.NON_VR -> stocks.filter { !it.isVr }
+            StockFilter.IB -> emptyList() // IB 종목은 IbViewModel에서 관리하므로 여기서는 빈 리스트
         }
 
         // 2. 정렬 (환율 적용)
@@ -191,12 +193,22 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         val transactions = repository.getAllTransactionsSnapshot()
         val daily = repository.getAllDailyHistorySnapshot()
         val history = repository.getAllStockHistorySnapshot()
+        
+        // 무한매수 데이터 추가
+        val ibAccounts = repository.getAllIbAccountsSnapshot()
+        val ibStocks = repository.getAllIbStocksSnapshot()
+        val ibTransactions = repository.getAllIbTransactionsSnapshot()
+        val ibWalletHistory = repository.getAllIbWalletHistorySnapshot()
 
         val backup = BackupData(
             stocks = stocks,
             transactions = transactions,
             dailyHistory = daily,
-            stockHistory = history
+            stockHistory = history,
+            ibAccounts = ibAccounts,
+            ibStocks = ibStocks,
+            ibTransactions = ibTransactions,
+            ibWalletHistory = ibWalletHistory
         )
         return Gson().toJson(backup)
     }
@@ -211,7 +223,11 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 backup.stocks,
                 backup.transactions,
                 backup.dailyHistory,
-                backup.stockHistory
+                backup.stockHistory,
+                backup.ibAccounts,
+                backup.ibStocks,
+                backup.ibTransactions,
+                backup.ibWalletHistory
             )
             refreshAllPrices()
             true
@@ -258,8 +274,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     val isRefreshing = _isRefreshing.asStateFlow()
 
     init {
-        val stockDao = AppDatabase.getDatabase(application).stockDao()
-        repository = StockRepository(stockDao)
+        val database = AppDatabase.getDatabase(application)
+        val stockDao = database.stockDao()
+        val ibDao = database.ibDao()
+        repository = StockRepository(stockDao, ibDao)
 
         allStocks = _allStocks.asStateFlow()
 
@@ -270,6 +288,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         viewModelScope.launch {
+            // 앱 기동 시 즉시 환율 갱신 시도
+            refreshExchangeRates()
+            
             // 앱 기동 시 첫 번째 수집에서만 모든 종목 스냅샷 저장
             var isFirstCollect = true
             repository.allStocks.collect { list ->
@@ -292,20 +313,33 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun updateDailySnapshot() {
         viewModelScope.launch {
-            // Wait for exchange rates/stocks to be stable? For now just use current values.
-            // Using logic similar to AssetStatus
+            // 모든 자산을 합산하여 스냅샷 저장
             val stocks = _allStocks.value
+            val ibStocks = repository.getAllIbStocksSnapshot()
+            val ibAccounts = repository.getAllIbAccountsSnapshot()
             val rates = _exchangeRates.value
             
-            val totalPrincipal = stocks.sumOf { it.investedPrincipal * (rates[it.currency] ?: 1.0) }
-            val totalCurrent = stocks.sumOf { ((it.currentPrice * it.quantity) + it.pool) * (rates[it.currency] ?: 1.0) }
+            val vrPrincipal = stocks.sumOf { it.investedPrincipal * (rates[it.currency] ?: 1.0) }
+            val vrCurrent = stocks.sumOf { ((it.currentPrice * it.quantity) + it.pool) * (rates[it.currency] ?: 1.0) }
             
+            val ibStockCurrent = ibStocks.sumOf { ((it.currentPrice * it.quantity) + it.pool) * (rates[it.currency] ?: 1.0) }
+            val ibWalletTotalInvested = ibAccounts.sumOf { it.totalInvested * (rates[it.currency] ?: 1.0) }
+            val ibWalletBalance = ibAccounts.sumOf { it.balance * (rates[it.currency] ?: 1.0) }
+
+            val totalPrincipal = vrPrincipal + ibWalletTotalInvested
+            val totalCurrent = vrCurrent + ibStockCurrent + ibWalletBalance
+            
+            val ibPrincipal = ibWalletTotalInvested
+            val ibCurrentValue = ibStockCurrent + ibWalletBalance
+
             val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
             
             val history = DailyAssetHistory(
                 date = today,
                 totalPrincipal = totalPrincipal,
-                totalCurrentValue = totalCurrent
+                totalCurrentValue = totalCurrent,
+                ibPrincipal = ibPrincipal,
+                ibCurrentValue = ibCurrentValue
             )
             repository.saveDailyHistory(history)
         }
@@ -387,9 +421,26 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
-    val assetStatus: StateFlow<AssetStatus> = combine(_allStocks, _exchangeRates) { stocks, rates ->
-        val principal = stocks.sumOf { it.investedPrincipal * (rates[it.currency] ?: 1.0) }
-        val current = stocks.sumOf { ((it.currentPrice * it.quantity) + it.pool) * (rates[it.currency] ?: 1.0) }
+    val assetStatus: StateFlow<AssetStatus> = combine(
+        _allStocks, 
+        repository.allIbStocks,
+        repository.allIbAccounts,
+        _exchangeRates
+    ) { stocks, ibStocks, ibAccounts, rates ->
+        // 1. VR/일반 종목 자산
+        val vrPrincipal = stocks.sumOf { it.investedPrincipal * (rates[it.currency] ?: 1.0) }
+        val vrCurrent = stocks.sumOf { ((it.currentPrice * it.quantity) + it.pool) * (rates[it.currency] ?: 1.0) }
+        
+        // 2. 무한매수 운용 종목 자산 (보유수량 가치 + 종목별 남은 Pool)
+        val ibStockCurrent = ibStocks.sumOf { ((it.currentPrice * it.quantity) + it.pool) * (rates[it.currency] ?: 1.0) }
+        
+        // 3. 무한매수 지갑 자산 (충전된 총 원금 및 현재 대기 중인 현금 잔액)
+        val ibWalletTotalInvested = ibAccounts.sumOf { it.totalInvested * (rates[it.currency] ?: 1.0) }
+        val ibWalletBalance = ibAccounts.sumOf { it.balance * (rates[it.currency] ?: 1.0) }
+
+        val principal = vrPrincipal + ibWalletTotalInvested
+        val current = vrCurrent + ibStockCurrent + ibWalletBalance
+        
         val roi = if (principal > 0) ((current - principal) / principal) * 100 else 0.0
         AssetStatus(principal, current, roi)
     }.stateIn(

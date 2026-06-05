@@ -262,4 +262,47 @@ object StockPriceService {
             return 0.0
         }
     }
+
+    /**
+     * 직전 5거래일 종가의 평균을 가져옵니다. (무한매수 리버스 모드용)
+     */
+    suspend fun get5DayMovingAverage(ticker: String): Double {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Yahoo Finance API에서 1달치 일봉 데이터를 가져옴
+                val url = "https://query1.finance.yahoo.com/v8/finance/chart/$ticker?range=1mo&interval=1d"
+                Log.d(TAG, "Fetching 5-day SMA for: $ticker from $url")
+
+                val response = Jsoup.connect(url)
+                    .userAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+                    .header("Accept", "application/json")
+                    .ignoreContentType(true)
+                    .timeout(10000)
+                    .execute()
+                    .body()
+
+                // JSON에서 "adjclose" 또는 "close" 배열 추출
+                val closeRegex = """"close":\s*\[([\d.,\s]*)\]""".toRegex()
+                val match = closeRegex.find(response)
+                
+                if (match != null) {
+                    val prices = match.groupValues[1].split(",")
+                        .map { it.trim().toDoubleOrNull() }
+                        .filterNotNull()
+                    
+                    if (prices.size >= 5) {
+                        // 가장 최근 5개 종가의 평균 (배열의 마지막 5개)
+                        val last5 = prices.takeLast(5)
+                        val avg = last5.average()
+                        Log.d(TAG, "5-day SMA for $ticker: $avg (Prices: $last5)")
+                        return@withContext avg
+                    }
+                }
+                0.0
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching 5-day SMA: $ticker", e)
+                0.0
+            }
+        }
+    }
 }

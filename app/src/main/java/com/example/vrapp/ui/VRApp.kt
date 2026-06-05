@@ -23,10 +23,11 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.vrapp.viewmodel.IbViewModel
 import com.example.vrapp.viewmodel.StockViewModel
 
 @Composable
-fun VRApp(viewModel: StockViewModel) {
+fun VRApp(stockViewModel: StockViewModel, ibViewModel: IbViewModel) {
     val navController = rememberNavController()
 
     Scaffold(
@@ -90,7 +91,8 @@ fun VRApp(viewModel: StockViewModel) {
                     icon = { Icon(Icons.Default.Home, contentDescription = null) },
                     route = "home",
                     onClick = {
-                        viewModel.refreshAllPrices() // 홈 버튼 클릭 시 가격 갱신
+                        stockViewModel.refreshAllPrices() // 홈 버튼 클릭 시 가격 갱신
+                        ibViewModel.refreshPrices()
                         navController.navigate("home") {
                             popUpTo(navController.graph.findStartDestination().id) { inclusive = false }
                             launchSingleTop = true
@@ -121,9 +123,13 @@ fun VRApp(viewModel: StockViewModel) {
         ) {
             composable("home") {
                 MainScreen(
-                    viewModel = viewModel,
+                    stockViewModel = stockViewModel,
+                    ibViewModel = ibViewModel,
                     onStockClick = { stockId ->
                         navController.navigate("detail/$stockId")
+                    },
+                    onIbStockClick = { ibStockId ->
+                        navController.navigate("ib_detail/$ibStockId")
                     },
                     onChartClick = {
                         navController.navigate("chart")
@@ -136,20 +142,31 @@ fun VRApp(viewModel: StockViewModel) {
             ) { backStackEntry ->
                 val stockId = backStackEntry.arguments?.getLong("stockId") ?: return@composable
                 DetailScreen(
-                    viewModel = viewModel,
+                    viewModel = stockViewModel,
                     stockId = stockId,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(
+                "ib_detail/{ibStockId}",
+                arguments = listOf(navArgument("ibStockId") { type = NavType.LongType })
+            ) { backStackEntry ->
+                val ibStockId = backStackEntry.arguments?.getLong("ibStockId") ?: return@composable
+                IbDetailScreen(
+                    viewModel = ibViewModel,
+                    ibStockId = ibStockId,
                     onBack = { navController.popBackStack() }
                 )
             }
             composable("chart") {
                 ChartScreen(
-                    viewModel = viewModel,
+                    viewModel = stockViewModel,
                     onBack = { navController.popBackStack() }
                 )
             }
             composable("settings") {
                 SettingsScreen(
-                    viewModel = viewModel,
+                    viewModel = stockViewModel,
                     onBack = { navController.popBackStack() }
                 )
             }

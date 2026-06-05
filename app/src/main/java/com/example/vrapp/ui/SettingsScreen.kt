@@ -23,6 +23,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import com.example.vrapp.logic.IBNotificationManager
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -32,7 +34,10 @@ fun SettingsScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     
-    // State for Dialogs
+    // 알림 설정 상태 (SharedPreferences 등 연동 권장하나 여기서는 간단히 로컬 변수)
+    var isReminderEnabled by remember { mutableStateOf(true) }
+    
+    // ... (기존 변수들) ...
     var showImportConfirmDialog by remember { mutableStateOf(false) }
     var showImportErrorDialog by remember { mutableStateOf(false) }
     var showResetConfirmDialog by remember { mutableStateOf(false) }
@@ -113,6 +118,37 @@ fun SettingsScreen(
                 .fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            Text("앱 설정", style = MaterialTheme.typography.titleMedium)
+
+            // Reminder Toggle
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("무한매수 매매 알림", style = MaterialTheme.typography.titleSmall)
+                        Text("매일 저녁 9시에 매매 가이드 확인 알림을 보냅니다.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(
+                        checked = isReminderEnabled,
+                        onCheckedChange = { 
+                            isReminderEnabled = it
+                            if (it) {
+                                IBNotificationManager.scheduleDailyReminder(context)
+                                Toast.makeText(context, "알림이 설정되었습니다.", Toast.LENGTH_SHORT).show()
+                            } else {
+                                IBNotificationManager.cancelReminder(context)
+                                Toast.makeText(context, "알림이 해제되었습니다.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+                }
+            }
+
+            Divider()
+
             Text("데이터 백업 및 복구", style = MaterialTheme.typography.titleMedium)
             
             // Export

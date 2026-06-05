@@ -10,27 +10,27 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import android.widget.Toast
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import com.example.vrapp.data.StockPriceService
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.vrapp.data.StockPriceService
 import com.example.vrapp.logic.VRCalculator
+import com.example.vrapp.model.IbStock
 import com.example.vrapp.model.Stock
+import com.example.vrapp.viewmodel.IbViewModel
 import com.example.vrapp.viewmodel.StockViewModel
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
@@ -38,272 +38,146 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// 유틸리티 포맷 함수
-fun formatCurrency(amount: Double, currency: String): String {
-    val locale = when (currency) {
-        "USD" -> Locale.US
-        "JPY" -> Locale.JAPAN
-        else -> Locale.KOREA
-    }
-    val format = NumberFormat.getCurrencyInstance(locale)
-    if (currency == "KRW" || currency == "JPY") {
-        format.maximumFractionDigits = 0
-    } else {
-        format.maximumFractionDigits = 2
-    }
-    return format.format(amount)
-}
+// 통합 리스트 아이템 인터페이스 (정렬 및 렌더링용)
+sealed class UnifiedStockItem {
+    abstract val id: Long
+    abstract val name: String
+    abstract val ticker: String
+    abstract val currentPrice: Double
+    abstract val quantity: Double
+    abstract val pool: Double
+    abstract val principal: Double
+    abstract val currency: String
 
-fun isCoin(ticker: String): Boolean {
-    return ticker.endsWith(".bithumb")
-}
-
-fun formatQuantity(quantity: Double, ticker: String): String {
-    return if (isCoin(ticker)) {
-        String.format("%.6f", quantity).trimEnd('0').trimEnd('.')
-    } else {
-        String.format("%.0f", quantity)
+    data class VrItem(val stock: Stock) : UnifiedStockItem() {
+        override val id = stock.id
+        override val name = stock.name
+        override val ticker = stock.ticker
+        override val currentPrice = stock.currentPrice
+        override val quantity = stock.quantity
+        override val pool = stock.pool
+        override val principal = stock.investedPrincipal
+        override val currency = stock.currency
     }
+
+    data class IbItem(val stock: IbStock) : UnifiedStockItem() {
+        override val id = stock.id
+        override val name = stock.name
+        override val ticker = stock.ticker
+        override val currentPrice = stock.currentPrice
+        override val quantity = stock.quantity
+        override val pool = stock.pool
+        override val principal = stock.principal
+        override val currency = stock.currency
+    }
+
+    fun getTotalAsset() = (currentPrice * quantity) + pool
+    fun getProfit() = getTotalAsset() - principal
+    fun getRoi() = if (principal > 0) (getProfit() / principal) * 100 else 0.0
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-    viewModel: StockViewModel,
+    stockViewModel: StockViewModel,
+    ibViewModel: IbViewModel,
     onStockClick: (Long) -> Unit,
+    onIbStockClick: (Long) -> Unit,
     onChartClick: () -> Unit
 ) {
-    // 기존 allStocks 대신 필터/정렬된 리스트 구독
-    val stocks by viewModel.displayStocks.collectAsState()
-    val assetStatus by viewModel.assetStatus.collectAsState()
-    val yesterdayAssetStatus by viewModel.yesterdayAssetStatus.collectAsState()
-    val yesterdayStockValuations by viewModel.yesterdayStockValuations.collectAsState()
-    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val vrStocks by stockViewModel.allStocks.collectAsState()
+    val ibStocks by ibViewModel.allIbStocks.collectAsState()
+    val ibAccounts by ibViewModel.allIbAccounts.collectAsState()
+    val assetStatus by stockViewModel.assetStatus.collectAsState()
+    val yesterdayAssetStatus by stockViewModel.yesterdayAssetStatus.collectAsState()
+    val yesterdayStockValuations by stockViewModel.yesterdayStockValuations.collectAsState()
+    val isRefreshingVr by stockViewModel.isRefreshing.collectAsState()
+    val isRefreshingIb by ibViewModel.isRefreshing.collectAsState()
     
-    // 필터/정렬 상태 구독
-    val currentFilter by viewModel.filterOption.collectAsState()
-    val currentSort by viewModel.sortOption.collectAsState()
+    val currentFilter by stockViewModel.filterOption.collectAsState()
+    val currentSort by stockViewModel.sortOption.collectAsState()
 
     var showAddDialog by remember { mutableStateOf(false) }
-    var stockToDelete by remember { mutableStateOf<Stock?>(null) }
-    var showSortMenu by remember { mutableStateOf(false) } // 정렬 메뉴 표시 여부
+    var stockToDelete by remember { mutableStateOf<UnifiedStockItem?>(null) }
+    var showSortMenu by remember { mutableStateOf(false) }
+    var showWalletDialog by remember { mutableStateOf(false) }
 
-    Scaffold(
-        floatingActionButton = {
-           // FAB Removed (Moved to Header)
+    // 통합 리스트 구성 및 필터/정렬 적용
+    val combinedList = remember(vrStocks, ibStocks, currentFilter, currentSort) {
+        val list = mutableListOf<UnifiedStockItem>()
+        if (currentFilter == StockViewModel.StockFilter.ALL || currentFilter == StockViewModel.StockFilter.VR || currentFilter == StockViewModel.StockFilter.NON_VR) {
+            val filteredVr = when(currentFilter) {
+                StockViewModel.StockFilter.VR -> vrStocks.filter { it.isVr }
+                StockViewModel.StockFilter.NON_VR -> vrStocks.filter { !it.isVr }
+                else -> vrStocks
+            }
+            list.addAll(filteredVr.map { UnifiedStockItem.VrItem(it) })
         }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            
-            // ... (Header Box) ... (Skipping Header Box Content for brevity in replace, keeping existing)
-            // 1. 상단 Header
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.primaryContainer)
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                // ... (Existing Header Content Code) ...
-                val totalProfitLoss = assetStatus.totalCurrent - assetStatus.totalPrincipal
-                val assetDiff = if (yesterdayAssetStatus != null) {
-                    assetStatus.totalCurrent - yesterdayAssetStatus!!.totalCurrent
-                } else {
-                    0.0
-                }
-                val assetDiffPercent = if (yesterdayAssetStatus != null && yesterdayAssetStatus!!.totalCurrent > 0) {
-                    (assetDiff / yesterdayAssetStatus!!.totalCurrent) * 100
-                } else {
-                    0.0
-                }
-                
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    // Row 1: 전일대비(자산) | 종목추가버튼
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val diffText = if (assetDiff >= 0) "+${formatCurrency(assetDiff, "KRW")}" else formatCurrency(assetDiff, "KRW")
-                        val diffPercentText = if (yesterdayAssetStatus != null && yesterdayAssetStatus!!.totalCurrent > 0) {
-                            String.format("(%+.1f%%)", assetDiffPercent)
-                        } else ""
+        if (currentFilter == StockViewModel.StockFilter.ALL || currentFilter == StockViewModel.StockFilter.IB) {
+            list.addAll(ibStocks.map { UnifiedStockItem.IbItem(it) })
+        }
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("전일대비(자산) : ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            Text(
-                                "$diffText $diffPercentText",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = if (assetDiff >= 0) Color.Red else Color.Blue
-                            )
-                        }
-                        
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // 새로고침 버튼
-                            Surface(
-                                onClick = { viewModel.refreshAllPrices() },
-                                color = if (isRefreshing) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.secondary,
-                                shape = androidx.compose.foundation.shape.CircleShape,
-                                modifier = Modifier.size(16.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Default.Refresh,
-                                        contentDescription = "새로고침",
-                                        modifier = Modifier.size(12.dp),
-                                        tint = MaterialTheme.colorScheme.onSecondary
-                                    )
-                                }
-                            }
-                            // 종목 추가 버튼
-                            Surface(
-                                onClick = { showAddDialog = true },
-                                color = MaterialTheme.colorScheme.primary,
-                                shape = androidx.compose.foundation.shape.CircleShape,
-                                modifier = Modifier.size(16.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Default.Add,
-                                        contentDescription = "종목 추가",
-                                        modifier = Modifier.size(12.dp),
-                                        tint = MaterialTheme.colorScheme.onPrimary
-                                    )
-                                }
-                            }
-                        }
-                    }
+        // 정렬 적용 (환율 무관하게 퍼센트는 그대로, 금액은 대략적 비교)
+        // 실제 환율 정밀 정렬은 ViewModel 내부 displayStocks 로직 참고하나 여기서는 단순화
+        when(currentSort) {
+            StockViewModel.StockSort.TOTAL_ASSET -> list.sortByDescending { it.getTotalAsset() }
+            StockViewModel.StockSort.PROFIT_PCT -> list.sortByDescending { it.getRoi() }
+            StockViewModel.StockSort.PROFIT_AMT -> list.sortByDescending { it.getProfit() }
+            else -> list.sortByDescending { it.getTotalAsset() }
+        }
+        list
+    }
 
-                    // Row 2: 총원금(손익) | 총자산(수익률)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Left: 총원금(손익)
-                        Column(modifier = Modifier.weight(1f)) {
-                             Text("총원금(손익)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                             Row(verticalAlignment = Alignment.Bottom) {
-                                 Text(
-                                     formatCurrency(assetStatus.totalPrincipal, "KRW"),
-                                     style = MaterialTheme.typography.bodyMedium,
-                                     fontWeight = FontWeight.Bold,
-                                     color = MaterialTheme.colorScheme.onPrimaryContainer
-                                 )
-                                 Text(
-                                     "(${if (totalProfitLoss >= 0) "+" else ""}${formatCurrency(totalProfitLoss, "KRW")})",
-                                     style = MaterialTheme.typography.bodySmall,
-                                     color = if (totalProfitLoss >= 0) Color.Red else Color.Blue,
-                                     maxLines = 1
-                                 )
-                             }
-                        }
-                        
-                        // Right: 총자산(수익률)
-                        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                             Text("총자산(수익률)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                             Row(verticalAlignment = Alignment.Bottom) {
-                                 Text(
-                                     formatCurrency(assetStatus.totalCurrent, "KRW"),
-                                     style = MaterialTheme.typography.bodyMedium,
-                                     fontWeight = FontWeight.Bold,
-                                     color = MaterialTheme.colorScheme.onPrimaryContainer
-                                 )
-                                 Text(
-                                     "(${String.format("%+.1f", assetStatus.totalROI)}%)",
-                                     style = MaterialTheme.typography.bodySmall,
-                                     color = if (assetStatus.totalROI >= 0) Color.Red else Color.Blue,
-                                     maxLines = 1
-                                 )
-                             }
-                        }
-                    }
-                }
+    Scaffold { paddingValues ->
+        Column(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
+            // 1. 헤더 (기존 자산 요약)
+            AssetSummaryHeader(assetStatus, yesterdayAssetStatus, isRefreshingVr || isRefreshingIb) {
+                stockViewModel.refreshAllPrices()
+                ibViewModel.refreshPrices()
             }
 
-            // 2. 필터 및 정렬 바 (신규 추가)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                // 필터 칩 리스트
-                androidx.compose.foundation.lazy.LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    items(StockViewModel.StockFilter.entries) { filter ->
-                        FilterChip(
-                            selected = currentFilter == filter,
-                            onClick = { viewModel.setFilter(filter) },
-                            label = { Text(filter.label) },
-                            leadingIcon = if (currentFilter == filter) {
-                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                            } else null
-                        )
-                    }
-                }
+            // 2. 필터 바
+            FilterAndSortBar(
+                currentFilter = currentFilter,
+                currentSort = currentSort,
+                onFilterChange = { stockViewModel.setFilter(it) },
+                onSortChange = { stockViewModel.setSort(it) },
+                onAddClick = { showAddDialog = true }
+            )
 
-                // 정렬 버튼
-                Box {
-                    TextButton(onClick = { showSortMenu = true }) {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "정렬")
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(currentSort.label, style = MaterialTheme.typography.bodySmall)
-                    }
-                    DropdownMenu(
-                        expanded = showSortMenu,
-                        onDismissRequest = { showSortMenu = false }
-                    ) {
-                        StockViewModel.StockSort.entries.forEach { sortOption ->
-                            DropdownMenuItem(
-                                text = { Text(sortOption.label) },
-                                onClick = {
-                                    viewModel.setSort(sortOption)
-                                    showSortMenu = false
-                                },
-                                trailingIcon = if (currentSort == sortOption) {
-                                    { Icon(Icons.Default.Check, contentDescription = null) }
-                                } else null
-                            )
-                        }
-                    }
-                }
+            // 3. 무한매수 지갑 대시보드 (IB 필터 시에만 노출)
+            if (currentFilter == StockViewModel.StockFilter.IB) {
+                IbWalletDashboard(ibAccounts) { showWalletDialog = true }
             }
-            
+
             Divider()
 
-            // 3. 중단 Content
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface)
-            ) {
-                if (stocks.isEmpty()) {
+            // 4. 종목 리스트
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+                if (combinedList.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("표시할 종목이 없습니다.", color = Color.Gray)
                     }
                 } else {
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(stocks, key = { it.id }) { stock ->
-                            val yesterdayVal = yesterdayStockValuations[stock.id]
-                            StockCard(
-                                stock = stock,
-                                yesterdayValuation = yesterdayVal,
-                                onClick = { onStockClick(stock.id) },
-                                onLongClick = { stockToDelete = stock }
-                            )
+                    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(combinedList, key = { "${it.javaClass.simpleName}_${it.id}" }) { item ->
+                            when(item) {
+                                is UnifiedStockItem.VrItem -> {
+                                    StockCard(
+                                        stock = item.stock,
+                                        yesterdayValuation = yesterdayStockValuations[item.id],
+                                        onClick = { onStockClick(item.id) },
+                                        onLongClick = { stockToDelete = item }
+                                    )
+                                }
+                                is UnifiedStockItem.IbItem -> {
+                                    IbStockCard(
+                                        stock = item.stock,
+                                        onClick = { onIbStockClick(item.id) },
+                                        onLongClick = { stockToDelete = item }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -311,37 +185,140 @@ fun MainScreen(
         }
     }
 
+    // 다이얼로그들
     if (showAddDialog) {
         AddStockDialog(
-            viewModel = viewModel,
-            onDismiss = { showAddDialog = false },
-            onConfirm = { name, ticker, v, g, pool, qty, price, currency, principal, startDate, band, limit ->
-                viewModel.addStock(name, ticker, v, g, pool, qty, price, currency, principal, startDate, true, band, limit)
-                showAddDialog = false
-            }
+            stockViewModel = stockViewModel,
+            ibViewModel = ibViewModel,
+            onDismiss = { showAddDialog = false }
         )
     }
 
-    // 삭제 확인 다이얼로그
-    stockToDelete?.let { stock ->
-        AlertDialog(
-            onDismissRequest = { stockToDelete = null },
-            icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color.Red) },
-            title = { Text("종목 삭제") },
-            text = { Text("'${stock.name}' 종목을 삭제하시겠습니까?\n\n삭제된 데이터는 복구할 수 없습니다.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.deleteStock(stock)
-                        stockToDelete = null
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
-                ) { Text("삭제") }
-            },
-            dismissButton = {
-                TextButton(onClick = { stockToDelete = null }) { Text("취소") }
+    if (showWalletDialog) {
+        IbWalletDialog(
+            viewModel = ibViewModel,
+            stockViewModel = stockViewModel,
+            onDismiss = { showWalletDialog = false }
+        )
+    }
+
+    stockToDelete?.let { item ->
+        DeleteConfirmDialog(
+            itemName = item.name,
+            onDismiss = { stockToDelete = null },
+            onConfirm = {
+                when(item) {
+                    is UnifiedStockItem.VrItem -> stockViewModel.deleteStock(item.stock)
+                    is UnifiedStockItem.IbItem -> ibViewModel.deleteIbStock(item.stock)
+                }
+                stockToDelete = null
             }
         )
+    }
+}
+
+@Composable
+fun AssetSummaryHeader(
+    assetStatus: StockViewModel.AssetStatus,
+    yesterdayAssetStatus: StockViewModel.AssetStatus?,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit
+) {
+    val totalProfitLoss = assetStatus.totalCurrent - assetStatus.totalPrincipal
+    val assetDiff = yesterdayAssetStatus?.let { assetStatus.totalCurrent - it.totalCurrent } ?: 0.0
+    val assetDiffPercent = if (yesterdayAssetStatus != null && yesterdayAssetStatus.totalCurrent > 0) (assetDiff / yesterdayAssetStatus.totalCurrent) * 100 else 0.0
+
+    Box(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer).padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("전일대비(자산) : ", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "${if (assetDiff >= 0) "+" else ""}${formatCurrency(assetDiff, "KRW")} (${String.format("%+.1f%%", assetDiffPercent)})",
+                        style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
+                        color = if (assetDiff >= 0) Color.Red else Color.Blue
+                    )
+                }
+                IconButton(onClick = onRefresh, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, tint = if (isRefreshing) Color.Gray else MaterialTheme.colorScheme.primary)
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column {
+                    Text("총원금(손익)", style = MaterialTheme.typography.labelSmall)
+                    Text("${formatCurrency(assetStatus.totalPrincipal, "KRW")} (${if (totalProfitLoss >= 0) "+" else ""}${formatCurrency(totalProfitLoss, "KRW")})",
+                        color = if (totalProfitLoss >= 0) Color.Red else Color.Blue, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("총자산(수익률)", style = MaterialTheme.typography.labelSmall)
+                    Text("${formatCurrency(assetStatus.totalCurrent, "KRW")} (${String.format("%+.1f%%", assetStatus.totalROI)})",
+                        color = if (assetStatus.totalROI >= 0) Color.Red else Color.Blue, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FilterAndSortBar(
+    currentFilter: StockViewModel.StockFilter,
+    currentSort: StockViewModel.StockSort,
+    onFilterChange: (StockViewModel.StockFilter) -> Unit,
+    onSortChange: (StockViewModel.StockSort) -> Unit,
+    onAddClick: () -> Unit
+) {
+    var showSortMenu by remember { mutableStateOf(false) }
+    
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        LazyRow(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val allFilters = StockViewModel.StockFilter.entries.toMutableList()
+            if (!allFilters.any { it.name == "IB" }) {
+                // IB 필터가 동적으로 추가되지 않았을 경우를 대비해 UI 전용으로라도 추가 (실제로는 ViewModel Enum 수정 필요)
+            }
+            items(allFilters) { filter ->
+                FilterChip(
+                    selected = currentFilter == filter,
+                    onClick = { onFilterChange(filter) },
+                    label = { Text(filter.label, fontSize = 11.sp) }
+                )
+            }
+        }
+        
+        Box {
+            IconButton(onClick = { showSortMenu = true }) { Icon(Icons.Default.List, contentDescription = null) }
+            DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
+                StockViewModel.StockSort.entries.forEach { sort ->
+                    DropdownMenuItem(text = { Text(sort.label) }, onClick = { onSortChange(sort); showSortMenu = false })
+                }
+            }
+        }
+        
+        IconButton(onClick = onAddClick) { Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+    }
+}
+
+@Composable
+fun IbWalletDashboard(accounts: List<com.example.vrapp.model.IbAccount>, onWalletClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable { onWalletClick() },
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("무한매수 통합 지갑", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(4.dp))
+            accounts.forEach { acc ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("${acc.currency} 잔액", style = MaterialTheme.typography.bodySmall)
+                    Text(formatCurrency(acc.balance, acc.currency), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                }
+            }
+            Text("탭하여 시드 충전/출금", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.6f))
+        }
     }
 }
 
@@ -353,150 +330,153 @@ fun StockCard(stock: Stock, yesterdayValuation: Double? = null, onClick: () -> U
     val profitLoss = currentTotal - stock.investedPrincipal
     val roi = if (stock.investedPrincipal > 0) (profitLoss / stock.investedPrincipal) * 100 else 0.0
     
-    // Calculate Yesterday Diff (Asset)
-    val diffFromYesterday = if (yesterdayValuation != null) {
-        currentTotal - yesterdayValuation
-    } else {
-        0.0 
-    }
+    val diffFromYesterday = if (yesterdayValuation != null) currentTotal - yesterdayValuation else 0.0
 
-    // Calculate VR Order for Background Color
-    // [main][2026-06-04] VR 5.0 가이드 반영: gValue 대신 bandRatio 사용
     val bands = VRCalculator.calculateBands(stock.vValue, stock.bandRatio)
     val order = VRCalculator.calculateOrder(currentValuation, stock.currentPrice, bands)
     
     val cardColor = when {
-        !stock.isVr -> MaterialTheme.colorScheme.surface // VR 아님: 기본색
-        order.action == VRCalculator.OrderAction.BUY -> Color(0xFFFFEBEE)   // 엷은 붉은색
-        order.action == VRCalculator.OrderAction.SELL -> Color(0xFFE3F2FD)  // 옅은 파란색
+        !stock.isVr -> MaterialTheme.colorScheme.surface
+        order.action == VRCalculator.OrderAction.BUY -> Color(0xFFFFEBEE)
+        order.action == VRCalculator.OrderAction.SELL -> Color(0xFFE3F2FD)
         else -> MaterialTheme.colorScheme.surface
     }
 
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            ),
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.cardColors(containerColor = cardColor)
     ) {
-        Box { // Box to place VR tag
-            Column(modifier = Modifier.padding(16.dp)) {
-                // 1줄: 종목명|VR태그 --------- 현재가
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = stock.name, 
-                            style = MaterialTheme.typography.bodyMedium, 
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (stock.isVr) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Surface(
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                shape = MaterialTheme.shapes.extraSmall
-                            ) {
-                                Text(
-                                    text = "VR",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = stock.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    if (stock.isVr) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.extraSmall) {
+                            Text(text = "VR", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                     }
-                    Text(
-                        text = formatCurrency(stock.currentPrice, stock.currency),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold
-                    )
                 }
-                
-                Spacer(modifier = Modifier.height(4.dp))
-                
-                // 2줄: 전일대비변동(금액,%) --------- 총손익금액(금액,%)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Left: 전일대비변동
-                    if (yesterdayValuation != null) {
-                        val diffText = if (diffFromYesterday >= 0) "+${formatCurrency(diffFromYesterday, stock.currency)}" else formatCurrency(diffFromYesterday, stock.currency)
-                        val diffPercent = if (yesterdayValuation > 0) (diffFromYesterday / yesterdayValuation) * 100 else 0.0
-                        Text(
-                            text = "$diffText (${String.format("%+.1f", diffPercent)}%)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (diffFromYesterday >= 0) Color.Red else Color.Blue
-                        )
-                    } else {
-                        Text("-", style = MaterialTheme.typography.bodySmall)
-                    }
-                    
-                    // Right: 총손익금액
-                    Text(
-                        text = "${formatCurrency(profitLoss, stock.currency)} (${String.format("%+.1f", roi)}%)",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold,
-                        color = if (profitLoss >= 0) Color.Red else Color.Blue
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // 3줄: 투자원금 --------- 총자산
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "투자원금 : ${formatCurrency(stock.investedPrincipal, stock.currency)}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "총자산 : ${formatCurrency(currentTotal, stock.currency)}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(2.dp))
-
-                // 4줄: 현재평가액 --------- Pool
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "현재평가액 : ${formatCurrency(currentValuation, stock.currency)}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "Pool : ${formatCurrency(stock.pool, stock.currency)}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
+                Text(text = formatCurrency(stock.currentPrice, stock.currency), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
             }
-    } // End of Box
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                if (yesterdayValuation != null) {
+                    val diffText = if (diffFromYesterday >= 0) "+${formatCurrency(diffFromYesterday, stock.currency)}" else formatCurrency(diffFromYesterday, stock.currency)
+                    val diffPercent = if (yesterdayValuation > 0) (diffFromYesterday / yesterdayValuation) * 100 else 0.0
+                    Text(text = "$diffText (${String.format("%+.1f", diffPercent)}%)", style = MaterialTheme.typography.bodySmall, color = if (diffFromYesterday >= 0) Color.Red else Color.Blue)
+                } else {
+                    Text("-", style = MaterialTheme.typography.bodySmall)
+                }
+                Text(text = "${formatCurrency(profitLoss, stock.currency)} (${String.format("%+.1f", roi)}%)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = if (profitLoss >= 0) Color.Red else Color.Blue)
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(text = "투자원금 : ${formatCurrency(stock.investedPrincipal, stock.currency)}", style = MaterialTheme.typography.bodySmall)
+                Text(text = "총자산 : ${formatCurrency(currentTotal, stock.currency)}", style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(text = "현재평가액 : ${formatCurrency(currentValuation, stock.currency)}", style = MaterialTheme.typography.bodySmall)
+                Text(text = "Pool : ${formatCurrency(stock.pool, stock.currency)}", style = MaterialTheme.typography.bodySmall)
+            }
+        }
     }
 }
 
-// ... (existing imports)
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun IbStockCard(stock: IbStock, onClick: () -> Unit, onLongClick: () -> Unit) {
+    val totalAsset = (stock.currentPrice * stock.quantity) + stock.pool
+    val currentProfit = totalAsset - stock.principal
+    val currentRoi = if (stock.principal > 0) (currentProfit / stock.principal) * 100 else 0.0
+    
+    val totalCumulativeProfit = currentProfit + stock.totalRealizedProfit
+    val totalRoi = if (stock.principal > 0) (totalCumulativeProfit / stock.principal) * 100 else 0.0
+
+    val progress = (stock.currentT / stock.divisions.toDouble()).coerceIn(0.0, 1.0)
+    
+    val statusColor = when {
+        stock.isReverseMode -> Color.Red
+        stock.currentT >= (stock.divisions / 2.0) -> Color(0xFFFFA000) // 주황
+        stock.quantity <= 0 -> Color.Gray
+        else -> MaterialTheme.colorScheme.primary
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Column {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(stock.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(6.dp))
+                        Surface(color = statusColor.copy(alpha = 0.1f), shape = CircleShape, border = androidx.compose.foundation.BorderStroke(1.dp, statusColor)) {
+                            Text(
+                                text = when {
+                                    stock.isReverseMode -> "리버스"
+                                    stock.quantity <= 0 -> "대기"
+                                    stock.currentT < (stock.divisions / 2.0) -> "전반전"
+                                    else -> "후반전"
+                                },
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                                style = MaterialTheme.typography.labelSmall, color = statusColor
+                            )
+                        }
+                    }
+                    Text(formatCurrency(stock.currentPrice, stock.currency), fontWeight = FontWeight.Bold)
+                }
+                
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("T: ${String.format("%.1f", stock.currentT)} / ${stock.divisions}", style = MaterialTheme.typography.bodySmall)
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "현재: ${formatCurrency(currentProfit, stock.currency)} (${String.format("%+.1f%%", currentRoi)})", 
+                            color = if (currentProfit >= 0) Color.Red else Color.Blue, 
+                            style = MaterialTheme.typography.labelSmall, 
+                            fontWeight = FontWeight.Bold
+                        )
+                        // [main][2026-06-04] 누적 수익률 항상 노출 (0이라도 표시하여 투자 지속성 시각화)
+                        Text(
+                            text = "누적: ${formatCurrency(totalCumulativeProfit, stock.currency)} (${String.format("%+.1f%%", totalRoi)})", 
+                            color = if (totalCumulativeProfit >= 0) Color.Red else Color.Blue, 
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("보유: ${formatQuantity(stock.quantity, stock.ticker)}", style = MaterialTheme.typography.bodySmall)
+                    Text("Pool: ${formatCurrency(stock.pool, stock.currency)}", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            LinearProgressIndicator(
+                progress = progress.toFloat(),
+                modifier = Modifier.fillMaxWidth().height(4.dp),
+                color = statusColor,
+                trackColor = statusColor.copy(alpha = 0.1f)
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddStockDialog(
-    viewModel: StockViewModel,
-    onDismiss: () -> Unit,
-    onConfirm: (String, String, Double, Double, Double, Double, Double, String, Double?, Long, Double, Double) -> Unit
+    stockViewModel: StockViewModel,
+    ibViewModel: IbViewModel,
+    onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val ibAccounts by ibViewModel.allIbAccounts.collectAsState()
+
+    // 투자 전략 선택
+    var selectedStrategy by remember { mutableStateOf("VR") } // "VR", "GENERAL", "IB"
 
     // 종목 정보
     var tickerInput by remember { mutableStateOf("") }
@@ -506,20 +486,25 @@ fun AddStockDialog(
     var priceStr by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
 
-    // 투자 정보
+    // 투자 정보 (공통/VR)
     var vValueStr by remember { mutableStateOf("") }
     var gValue by remember { mutableFloatStateOf(10f) }
     var poolStr by remember { mutableStateOf("") }
     var qtyStr by remember { mutableStateOf("") }
     var principalStr by remember { mutableStateOf("") }
-
-    // [main][2026-06-04] VR 5.0 가이드 반영: 밴드 비율 및 Pool 제한 비율
     var bandRatio by remember { mutableFloatStateOf(15f) }
     var poolLimitRatio by remember { mutableFloatStateOf(0.25f) }
+    
+    // 투자 정보 (IB 전용)
+    var ibDivisions by remember { mutableIntStateOf(40) }
+    var ibVolatility by remember { mutableFloatStateOf(15f) }
     
     // 시작일 정보
     var startDateMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var showDatePicker by remember { mutableStateOf(false) }
+
+    val walletBalance = ibAccounts.find { it.currency == selectedCurrency }?.balance ?: 0.0
+    val isInsufficientBalance = selectedStrategy == "IB" && (principalStr.toDoubleOrNull() ?: 0.0) > walletBalance
 
     if (showDatePicker) {
         val datePickerState = rememberDatePickerState(initialSelectedDateMillis = startDateMillis)
@@ -531,31 +516,8 @@ fun AddStockDialog(
                     showDatePicker = false
                 }) { Text("확인") }
             },
-            dismissButton = {
-                TextButton(onClick = { showDatePicker = false }) { Text("취소") }
-            }
-        ) {
-            DatePicker(state = datePickerState)
-        }
-    }
-
-    // 종목 조회 함수
-    fun searchStock() {
-        if (tickerInput.isBlank() || isLoading) return
-        isLoading = true
-        coroutineScope.launch {
-            val stockInfo = viewModel.fetchStockInfo(tickerInput, selectedMarket)
-            if (stockInfo != null) {
-                stockName = stockInfo.name
-                priceStr = stockInfo.price.toString()
-                selectedCurrency = stockInfo.currency
-            } else {
-                Toast.makeText(context, "종목을 찾을 수 없습니다", Toast.LENGTH_SHORT).show()
-                stockName = ""
-                priceStr = ""
-            }
-            isLoading = false
-        }
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("취소") } }
+        ) { DatePicker(state = datePickerState) }
     }
 
     AlertDialog(
@@ -563,189 +525,131 @@ fun AddStockDialog(
         title = { Text("새 종목 추가") },
         text = {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // 증시 선택
+                // 1. 전략 선택
+                Text("투자 전략 선택", style = MaterialTheme.typography.labelMedium)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("VR" to "가치분할", "GENERAL" to "일반", "IB" to "무한매수").forEach { (code, label) ->
+                        FilterChip(
+                            selected = selectedStrategy == code,
+                            onClick = { selectedStrategy = code },
+                            label = { Text(label, fontSize = 11.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                // 2. 증시 선택
                 Text("증시 선택", style = MaterialTheme.typography.labelMedium)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    StockPriceService.Market.entries.forEach { market ->
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(StockPriceService.Market.entries) { market ->
                         FilterChip(
                             selected = selectedMarket == market,
                             onClick = {
                                 selectedMarket = market
                                 selectedCurrency = market.currency
-                                // 금인 경우 티커 자동 입력, 그 외에는 초기화
-                                if (market == StockPriceService.Market.GOLD) {
-                                    tickerInput = "GOLD"
-                                } else if (tickerInput == "GOLD") {
-                                    tickerInput = ""
-                                }
-                                // 증시 변경 시 기존 조회 결과 초기화
-                                stockName = ""
-                                priceStr = ""
+                                tickerInput = if (market == StockPriceService.Market.GOLD) "GOLD" else ""
+                                stockName = ""; priceStr = ""
                             },
                             label = { Text(market.label, style = MaterialTheme.typography.labelSmall) },
                         )
                     }
                 }
 
-                // 티커 입력 + 조회 버튼
+                // 3. 티커 입력
                 OutlinedTextField(
                     value = tickerInput,
                     onValueChange = { if (selectedMarket != StockPriceService.Market.GOLD) tickerInput = it.trim().uppercase() },
-                    label = { Text(if (selectedMarket == StockPriceService.Market.GOLD) "종목 (고정)" else "종목 티커") },
-                    readOnly = selectedMarket == StockPriceService.Market.GOLD,
-                    placeholder = {
-                        Text(
-                            when (selectedMarket) {
-                                StockPriceService.Market.KOSPI, StockPriceService.Market.KOSDAQ -> "예: 005930"
-                                StockPriceService.Market.US -> "예: AAPL"
-                                StockPriceService.Market.JAPAN -> "예: 7203"
-                                StockPriceService.Market.COIN -> "예: BTC"
-                                StockPriceService.Market.GOLD -> "한국금거래소 시세 적용"
-                            }
-                        )
-                    },
+                    label = { Text("종목 티커") },
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
                     trailingIcon = {
-                        IconButton(
-                            onClick = { searchStock() },
-                            enabled = tickerInput.isNotBlank() && !isLoading
-                        ) {
-                            if (isLoading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(Icons.Default.Search, contentDescription = "시세 조회")
+                        IconButton(onClick = {
+                            if (tickerInput.isNotBlank()) {
+                                isLoading = true
+                                coroutineScope.launch {
+                                    val info = stockViewModel.fetchStockInfo(tickerInput, selectedMarket)
+                                    if (info != null) {
+                                        stockName = info.name; priceStr = info.price.toString(); selectedCurrency = info.currency
+                                    } else {
+                                        Toast.makeText(context, "종목을 찾을 수 없습니다", Toast.LENGTH_SHORT).show()
+                                    }
+                                    isLoading = false
+                                }
                             }
+                        }) {
+                            if (isLoading) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Default.Search, contentDescription = null)
                         }
                     }
                 )
 
-                // 종목명 표시 (조회 결과)
                 if (stockName.isNotBlank()) {
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer
-                        )
-                    ) {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text("종목명 : $stockName", fontWeight = FontWeight.Bold)
-                            Text("현재가 : ${formatCurrency(priceStr.toDoubleOrNull() ?: 0.0, selectedCurrency)} ($selectedCurrency)")
+                            Text("현재가 : ${formatCurrency(priceStr.toDoubleOrNull() ?: 0.0, selectedCurrency)}")
                         }
                     }
                 }
 
                 Divider()
 
-                // 투자 정보 입력
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 4. 전략별 입력 필드
+                if (selectedStrategy == "IB") {
+                    // 무한매수 전용
                     OutlinedTextField(
-                        value = qtyStr,
-                        onValueChange = { input ->
-                            // 코인이 아니면 숫자만, 코인이면 소수점 허용
-                            val filtered = if (selectedMarket != StockPriceService.Market.COIN) {
-                                input.filter { it.isDigit() }
-                            } else {
-                                input.filter { it.isDigit() || it == '.' }
-                            }
-                            qtyStr = filtered
-                        },
-                        label = { Text("수량") },
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                        modifier = Modifier.weight(1f)
+                        value = principalStr,
+                        onValueChange = { principalStr = it },
+                        label = { Text("총 투자 원금 (지갑 할당)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        isError = isInsufficientBalance,
+                        supportingText = {
+                            if (isInsufficientBalance) Text("지갑 잔액이 부족합니다 (잔액: ${formatCurrency(walletBalance, selectedCurrency)})", color = Color.Red)
+                            else Text("현재 지갑 잔액: ${formatCurrency(walletBalance, selectedCurrency)}")
+                        }
                     )
-                    OutlinedTextField(
-                        value = poolStr,
-                        onValueChange = { poolStr = it },
-                        label = { Text("Pool") },
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                    
+                    Text("분할 수 설정", style = MaterialTheme.typography.labelMedium)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(20, 30, 40).forEach { div ->
+                            FilterChip(
+                                selected = ibDivisions == div,
+                                onClick = { ibDivisions = div },
+                                label = { Text("${div}분할") },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
 
-                OutlinedTextField(
-                    value = principalStr,
-                    onValueChange = { principalStr = it },
-                    label = { Text("초기 원금 (비워두면 자동계산)") },
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = vValueStr,
-                    onValueChange = { vValueStr = it },
-                    label = { Text("초기 V값 (비워두면 자동계산)") },
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Divider()
-
-                // [main][2026-06-04] VR 5.0 가이드 반영: 투자 유형 및 상세 설정
-                Text("VR 투자 유형 (가이드)", style = MaterialTheme.typography.labelMedium)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    val strategies = listOf("적립식", "거치식", "인출식", "직접입력")
-                    strategies.forEach { strategy ->
-                        FilterChip(
-                            selected = when(strategy) {
-                                "적립식" -> gValue == 10f && bandRatio == 15f && poolLimitRatio == 0.75f
-                                "거치식" -> gValue == 10f && bandRatio == 15f && poolLimitRatio == 0.50f
-                                "인출식" -> gValue == 20f && bandRatio == 15f && poolLimitRatio == 0.25f
-                                else -> false
-                            },
-                            onClick = {
-                                when(strategy) {
-                                    "적립식" -> { gValue = 10f; bandRatio = 15f; poolLimitRatio = 0.75f }
-                                    "거치식" -> { gValue = 10f; bandRatio = 15f; poolLimitRatio = 0.50f }
-                                    "인출식" -> { gValue = 20f; bandRatio = 15f; poolLimitRatio = 0.25f }
-                                }
-                            },
-                            label = { Text(strategy, style = MaterialTheme.typography.labelSmall) }
-                        )
+                    Text("목표 변동성 설정", style = MaterialTheme.typography.labelMedium)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(10f, 15f, 20f).forEach { vol ->
+                            FilterChip(
+                                selected = ibVolatility == vol,
+                                onClick = { ibVolatility = vol },
+                                label = { Text("${vol.toInt()}%") },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                } else {
+                    // VR 및 일반 공통
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = qtyStr, onValueChange = { qtyStr = it }, label = { Text("수량") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                        OutlinedTextField(value = poolStr, onValueChange = { poolStr = it }, label = { Text("Pool") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    }
+                    if (selectedStrategy == "VR") {
+                        OutlinedTextField(value = vValueStr, onValueChange = { vValueStr = it }, label = { Text("초기 V값 (비워두면 자동계산)") }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                        Text("밴드 비율: ${bandRatio.toInt()}%", fontWeight = FontWeight.Bold)
+                        Slider(value = bandRatio, onValueChange = { bandRatio = it }, valueRange = 5f..30f)
                     }
                 }
 
-                Column {
-                    Text("G값 (기울기): ${gValue.toInt()}%", fontWeight = FontWeight.Bold)
-                    Slider(value = gValue, onValueChange = { gValue = it }, valueRange = 1f..30f, steps = 29)
-                }
-
-                Column {
-                    Text("밴드 비율: ${bandRatio.toInt()}%", fontWeight = FontWeight.Bold)
-                    Slider(value = bandRatio, onValueChange = { bandRatio = it }, valueRange = 5f..30f, steps = 25)
-                }
-
-                Column {
-                    Text("사이클당 Pool 사용 제한: ${(poolLimitRatio * 100).toInt()}%", fontWeight = FontWeight.Bold)
-                    Slider(value = poolLimitRatio, onValueChange = { poolLimitRatio = it }, valueRange = 0.1f..1.0f, steps = 18)
-                }
-                
-                // 시작일 선택 버튼
-                val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(
-                    Date(
-                        startDateMillis
-                    )
-                )
-                OutlinedButton(
-                    onClick = { showDatePicker = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("투자 시작일: $dateStr")
+                OutlinedButton(onClick = { showDatePicker = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("투자 시작일: ${SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(startDateMillis))}")
                 }
             }
         },
@@ -755,18 +659,18 @@ fun AddStockDialog(
                     val price = priceStr.toDoubleOrNull() ?: 0.0
                     val qty = qtyStr.toDoubleOrNull() ?: 0.0
                     val pool = poolStr.toDoubleOrNull() ?: 0.0
-                    val v = vValueStr.toDoubleOrNull() ?: (price * qty)
-                    val principal = principalStr.toDoubleOrNull()
-                    val name = stockName.ifBlank { tickerInput }
-                    // 티커에 증시 suffix 포함하여 저장
+                    val principal = principalStr.toDoubleOrNull() ?: ((price * qty) + pool)
                     val fullTicker = tickerInput + selectedMarket.suffix
-                    if (tickerInput.isNotBlank() && price > 0) {
-                        onConfirm(name, fullTicker, v, gValue.toDouble(), pool, qty, price, selectedCurrency, principal, startDateMillis, bandRatio.toDouble(), poolLimitRatio.toDouble())
+
+                    if (selectedStrategy == "IB") {
+                        ibViewModel.addIbStock(stockName, fullTicker, principal, ibDivisions, ibVolatility.toDouble(), selectedCurrency, price, qty)
                     } else {
-                        Toast.makeText(context, "종목을 먼저 조회해주세요", Toast.LENGTH_SHORT).show()
+                        val v = vValueStr.toDoubleOrNull() ?: (price * qty)
+                        stockViewModel.addStock(stockName, fullTicker, v, gValue.toDouble(), pool, qty, price, selectedCurrency, principal, startDateMillis, selectedStrategy == "VR", bandRatio.toDouble(), poolLimitRatio.toDouble())
                     }
+                    onDismiss()
                 },
-                enabled = stockName.isNotBlank() && priceStr.isNotBlank()
+                enabled = stockName.isNotBlank() && priceStr.isNotBlank() && !isInsufficientBalance
             ) { Text("추가") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
