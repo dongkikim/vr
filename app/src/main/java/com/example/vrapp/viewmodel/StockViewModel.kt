@@ -53,6 +53,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
             "JPY" to 9.0      // 기본값 (실시간 조회 전)
         )
     )
+    val exchangeRates = _exchangeRates.asStateFlow()
 
     // Yesterday's Valuation per Stock (Map<StockId, Valuation>)
     private val _yesterdayStockValuations = MutableStateFlow<Map<Long, Double>>(emptyMap())

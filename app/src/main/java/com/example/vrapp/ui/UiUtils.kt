@@ -22,6 +22,20 @@ fun formatCurrency(amount: Double, currency: String): String {
 }
 
 /**
+ * 숫자를 지정된 소수점 자리수까지 포맷
+ */
+fun formatNumber(value: Double, decimals: Int): String {
+    return String.format("%.${decimals}f", value)
+}
+
+/**
+ * 원화(KRW) 금액 포맷 (심볼 없이 숫자와 콤마만)
+ */
+fun formatKRW(value: Double): String {
+    return NumberFormat.getNumberInstance(Locale.KOREA).format(value.toLong())
+}
+
+/**
  * 코인 종목 여부 판별
  */
 fun isCoin(ticker: String): Boolean {

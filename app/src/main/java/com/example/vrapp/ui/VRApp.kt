@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -100,6 +101,20 @@ fun VRApp(stockViewModel: StockViewModel, ibViewModel: IbViewModel) {
                     }
                 )
 
+                // [main][2026-06-08] 현황 (Status) 메뉴 추가
+                CustomNavItem(
+                    label = "현황",
+                    icon = { Icon(Icons.Default.List, contentDescription = null) },
+                    route = "status",
+                    onClick = {
+                        navController.navigate("status") {
+                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                )
+
                 // 3. 차트 (Chart)
                 CustomNavItem(
                     label = "차트",
@@ -156,6 +171,12 @@ fun VRApp(stockViewModel: StockViewModel, ibViewModel: IbViewModel) {
                     viewModel = ibViewModel,
                     ibStockId = ibStockId,
                     onBack = { navController.popBackStack() }
+                )
+            }
+            composable("status") {
+                StatusScreen(
+                    stockViewModel = stockViewModel,
+                    ibViewModel = ibViewModel
                 )
             }
             composable("chart") {

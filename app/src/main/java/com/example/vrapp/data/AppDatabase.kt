@@ -161,7 +161,7 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
         IbTransaction::class,
         com.example.vrapp.model.IbWalletHistory::class
     ],
-    version = 18,
+    version = 19,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 4, to = 5),
@@ -173,7 +173,8 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
         AutoMigration(from = 14, to = 15),  // [main][2026-06-04] 무한매수(IB) 관련 테이블 추가
         AutoMigration(from = 15, to = 16),   // 지갑 변동 내역 테이블 추가
         AutoMigration(from = 16, to = 17),   // IbStock에 totalRealizedProfit 추가, DailyAssetHistory에 ibPrincipal/Value 추가
-        AutoMigration(from = 17, to = 18)    // [main][2026-06-05] 평단가 필드 추가
+        AutoMigration(from = 17, to = 18),    // [main][2026-06-05] 평단가 필드 추가
+        AutoMigration(from = 18, to = 19)    // [main][2026-06-08] VR 종목에도 명시적 평단가 필드 추가
     ]
 )
 abstract class AppDatabase : RoomDatabase() {

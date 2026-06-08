@@ -47,7 +47,11 @@ data class Stock(
     val bandRatio: Double = 15.0, // 밴드 비율 (기본 15%)
 
     @ColumnInfo(defaultValue = "0.25")
-    val poolLimitRatio: Double = 0.25 // 사이클당 Pool 사용 제한 비율 (기본 25%)
+    val poolLimitRatio: Double = 0.25, // 사이클당 Pool 사용 제한 비율 (기본 25%)
+
+    // [main][2026-06-08] 평단가 왜곡 문제 해결을 위해 명시적 평단가 필드 추가
+    @ColumnInfo(defaultValue = "0.0")
+    val averagePrice: Double = 0.0
 )
 
 @Entity(tableName = "transactions")
@@ -80,7 +84,11 @@ data class TransactionHistory(
     val previousBandRatio: Double = 15.0,
 
     @ColumnInfo(defaultValue = "0.25")
-    val previousPoolLimitRatio: Double = 0.25
+    val previousPoolLimitRatio: Double = 0.25,
+
+    // [main][2026-06-08] 이전 평단가 기록
+    @ColumnInfo(defaultValue = "0.0")
+    val previousAveragePrice: Double = 0.0
 ) {
     // 이전 상태 정보가 있는지 확인 (삭제 가능 여부)
     // 수량은 절대 음수가 될 수 없으므로 previousQuantity만 체크 (-1이면 마이그레이션 전 데이터)
